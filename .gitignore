@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+dist-nuitka/
+*.egg-info/
+*.egg
+
+# Build logs & artifacts
+nuitka_build_log.txt
+*.spec
+*.spec.bak
+
+# Virtual environments
+.venv/
+venv/
+env/
+test-venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
+*.rag
+data/
+.rag-kb/
+
+# Bundled ML models (large binaries)
+models/
+
+# Test data (not part of the package)
+test-docs-verify/
+
+# Sentence-transformers / HuggingFace cache
+.cache/

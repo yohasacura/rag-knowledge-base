@@ -1,0 +1,37 @@
+# Build artefacts
+build/
+dist/
+*.egg-info/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project data
+*.rag
+data/
+.rag-kb/
+.cache/
+
+# Test files
+test-docs-verify/
+tests/
+
+# Git
+.git/
+.gitignore

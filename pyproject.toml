@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rag-knowledge-base"
+version = "1.0.0"
+description = "100% offline RAG storage and MCP server for querying local document knowledge bases"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "RAG Knowledge Base Contributors" },
+]
+keywords = ["rag", "mcp", "knowledge-base", "offline", "vector-search"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.2.0",
+    "PySide6>=6.5.0",
+    "pypdf>=3.0.0",
+    "python-docx>=1.0.0",
+    "python-pptx>=0.6.21",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.0",
+    "watchdog>=3.0.0",
+    "pyyaml>=6.0",
+    "openpyxl>=3.1.0",
+    "striprtf>=0.0.26",
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "Pillow>=10.0.0",
+    "rapidocr>=3.6.0",
+    "xxhash>=3.0.0",
+    "rank-bm25>=0.2.2",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+ocr-tesseract = [
+    "pytesseract>=0.3.10",
+]
+ocr-easyocr = [
+    "easyocr>=1.7.0",
+]
+dev = [
+    "build>=1.0.0",
+    "pyinstaller>=6.0.0",
+    "pytest>=7.0.0",
+    "twine>=4.0.0",
+]
+
+[project.scripts]
+rag-kb = "rag_kb.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/yohasacura/rag-knowledge-base"
+Repository = "https://github.com/yohasacura/rag-knowledge-base"
+Issues = "https://github.com/yohasacura/rag-knowledge-base/issues"
+Changelog = "https://github.com/yohasacura/rag-knowledge-base/releases"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag_kb"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/rag_kb"]
