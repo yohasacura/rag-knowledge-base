@@ -29,7 +29,7 @@ dependencies = [
     "mcp[cli]>=1.0.0",
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
-    "PySide6>=6.5.0",
+    "nicegui>=2.0.0",
     "pypdf>=3.0.0",
     "python-docx>=1.0.0",
     "python-pptx>=0.6.21",
@@ -43,6 +43,8 @@ dependencies = [
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "Pillow>=10.0.0",
+    "surya-ocr>=0.17.0",
+    "transformers>=4.56.1,<5.0",
     "rapidocr>=3.6.0",
     "xxhash>=3.0.0",
     "rank-bm25>=0.2.2",
@@ -55,6 +57,19 @@ ocr-tesseract = [
 ]
 ocr-easyocr = [
     "easyocr>=1.7.0",
+]
+openai = [
+    "openai>=1.0.0",
+]
+voyage = [
+    "voyageai>=0.3.0",
+]
+api = [
+    "openai>=1.0.0",
+    "voyageai>=0.3.0",
+]
+monitoring = [
+    "psutil>=5.9.0",
 ]
 dev = [
     "build>=1.0.0",

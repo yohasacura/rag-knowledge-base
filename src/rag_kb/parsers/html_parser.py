@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from rag_kb.parsers.base import DocumentParser, ParsedDocument
 
 logger = logging.getLogger(__name__)
+
+_RE_MULTI_NEWLINES = re.compile(r"\n{3,}")
 
 
 class HtmlParser:
@@ -39,8 +42,7 @@ class HtmlParser:
         text = soup.get_text(separator="\n", strip=True)
 
         # Collapse multiple newlines
-        import re
-        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = _RE_MULTI_NEWLINES.sub("\n\n", text)
 
         if title:
             text = f"{title}\n\n{text}"

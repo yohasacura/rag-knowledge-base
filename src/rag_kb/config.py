@@ -8,6 +8,7 @@ import os
 import platform
 import shutil
 import gc
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,18 +23,31 @@ logger = logging.getLogger(__name__)
 def _close_chroma_for_path(db_path: str) -> None:
     """Best-effort: forcefully close any in-process ChromaDB client pointing at *db_path*.
 
-    Walks the GC graph to find VectorStore and PersistentClient instances
-    whose path matches, then:
-      1. Deletes the Rust bindings (releases memory-mapped HNSW files)
-      2. Stops the ChromaDB system
-      3. Clears the singleton cache
+    Walks the GC graph to find VectorStore, PersistentClient and
+    FileManifest instances whose path falls under *db_path*, then:
+      1. Closes FileManifest SQLite connections (releases WAL/SHM locks)
+      2. Deletes the Rust bindings (releases memory-mapped HNSW files)
+      3. Stops the ChromaDB system
+      4. Clears the singleton cache
     """
     try:
         from rag_kb.vector_store import VectorStore  # local to avoid circular
+        from rag_kb.file_manifest import FileManifest
         import chromadb
         norm = os.path.normcase(os.path.normpath(db_path))
 
         for obj in gc.get_objects():
+            # Close FileManifest SQLite connections whose db file lives
+            # under the target path (e.g. <rag_dir>/chroma_db/file_manifest.db)
+            try:
+                if isinstance(obj, FileManifest):
+                    manifest_path = os.path.normcase(
+                        os.path.normpath(getattr(obj, "_db_path", ""))
+                    )
+                    if manifest_path.startswith(norm):
+                        obj.close()
+            except Exception:  # noqa: BLE001
+                pass
             try:
                 if isinstance(obj, VectorStore):
                     obj_path = os.path.normcase(os.path.normpath(getattr(obj, "_db_path", "")))
@@ -70,7 +84,7 @@ def _rmtree_with_retries(path: Path, retries: int = 8, delay: float = 0.3) -> No
     """Remove a directory tree with retries for transient Windows locks.
 
     Before retrying, the helper attempts to close any in-process ChromaDB
-    clients that may still hold the SQLite file open.
+    clients and FileManifest SQLite connections that may still hold files open.
     """
     last_exc: Exception | None = None
     for attempt in range(retries):
@@ -79,10 +93,16 @@ def _rmtree_with_retries(path: Path, retries: int = 8, delay: float = 0.3) -> No
             return
         except (PermissionError, OSError) as exc:
             last_exc = exc
-            # Try to close ChromaDB connections holding the lock
+            # Try to close ChromaDB + FileManifest connections holding locks.
+            # Pass *both* the chroma_db dir (for ChromaDB/VectorStore) and
+            # the parent rag dir (so FileManifest paths that live under it
+            # are also matched).
             chroma_dir = path / "chroma_db"
             if chroma_dir.exists():
                 _close_chroma_for_path(str(chroma_dir))
+            # Also sweep with the parent path so FileManifest instances
+            # whose db_path is <rag_dir>/chroma_db/file_manifest.db match.
+            _close_chroma_for_path(str(path))
             gc.collect()
             if attempt < retries - 1:
                 time.sleep(delay * (attempt + 1))  # progressive back-off
@@ -145,12 +165,22 @@ class AppSettings(BaseModel):
     mmr_lambda: float = 0.7               # 0 = max diversity, 1 = max relevance
 
     # Indexing performance settings
-    indexing_workers: int = 4              # parallel file-parsing workers
+    indexing_workers: int = 0              # 0 = auto (min(cpu_count, 8))
     embedding_batch_size: int = 256        # texts per encode() call
 
     # ChromaDB HNSW tuning
     hnsw_ef_construction: int = 200
     hnsw_m: int = 32
+
+    # Model management
+    trusted_models: list[str] = Field(
+        default_factory=list,
+        description="Models the user has consented to run with trust_remote_code=True",
+    )
+
+    # API keys (stored in config.yaml — NOT committed to version control)
+    openai_api_key: str = ""
+    voyage_api_key: str = ""
 
     # ------------------------------------------------------------------
 
@@ -189,6 +219,7 @@ class RagEntry(BaseModel):
     description: str = ""
     db_path: str = ""          # absolute path to chroma_db dir
     embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_dimension: int = 0  # 0 = auto-detect from model registry
     source_folders: list[str] = Field(default_factory=list)
     created_at: str = ""
     is_imported: bool = False
@@ -211,6 +242,7 @@ class RagRegistry:
         self._rags_dir = rags_dir or RAGS_DIR
         self._rags: dict[str, RagEntry] = {}
         self._active: str | None = None
+        self._file_lock = threading.RLock()
         self._load()
 
     # -- persistence --------------------------------------------------------
@@ -231,15 +263,16 @@ class RagRegistry:
         self._run_pending_cleanups()
 
     def _save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        data: dict[str, Any] = {
-            "active": self._active,
-            "rags": {n: e.model_dump() for n, e in self._rags.items()},
-        }
-        if self._pending_cleanups:
-            data["pending_cleanups"] = self._pending_cleanups
-        with open(self._path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2, ensure_ascii=False)
+        with self._file_lock:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            data: dict[str, Any] = {
+                "active": self._active,
+                "rags": {n: e.model_dump() for n, e in self._rags.items()},
+            }
+            if self._pending_cleanups:
+                data["pending_cleanups"] = self._pending_cleanups
+            with open(self._path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2, ensure_ascii=False)
 
     def _add_pending_cleanup(self, dir_path: str) -> None:
         if dir_path not in self._pending_cleanups:
@@ -257,7 +290,13 @@ class RagRegistry:
                 logger.debug("Pending cleanup path already gone: %s", p)
                 continue
             try:
-                shutil.rmtree(p)
+                # Close any lingering handles before retrying deletion
+                _close_chroma_for_path(str(p))
+                chroma_dir = p / "chroma_db"
+                if chroma_dir.exists():
+                    _close_chroma_for_path(str(chroma_dir))
+                gc.collect()
+                _rmtree_with_retries(p)
                 logger.info("Deferred cleanup succeeded: %s", p)
             except (PermissionError, OSError) as exc:
                 logger.debug("Deferred cleanup still failing for %s: %s", p, exc)

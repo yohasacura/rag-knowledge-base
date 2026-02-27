@@ -11,6 +11,10 @@ from rag_kb.parsers.base import DocumentParser, ParsedDocument
 
 logger = logging.getLogger(__name__)
 
+_RE_HTML_TAGS = re.compile(r"<[^>]+>")
+_RE_WHITESPACE = re.compile(r"\s+")
+_RE_MULTI_NEWLINES = re.compile(r"\n{3,}")
+
 
 class EpubParser:
     """Parse EPUB ebook files, extracting text content from all chapters."""
@@ -70,8 +74,8 @@ def _html_to_text(html: str) -> str:
         text = soup.get_text(separator="\n", strip=True)
     except Exception:
         # Fallback: strip tags
-        text = re.sub(r"<[^>]+>", " ", html)
-        text = re.sub(r"\s+", " ", text).strip()
+        text = _RE_HTML_TAGS.sub(" ", html)
+        text = _RE_WHITESPACE.sub(" ", text).strip()
 
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _RE_MULTI_NEWLINES.sub("\n\n", text)
     return text

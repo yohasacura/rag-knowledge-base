@@ -7,6 +7,22 @@ from pathlib import Path
 
 from rag_kb.parsers.base import DocumentParser, ParsedDocument
 
+# Pre-compiled regex patterns for RST markup stripping
+_RE_DIRECTIVES = re.compile(r"^\.\.\s[a-zA-Z0-9_-]+::\s*.*$", re.MULTILINE)
+_RE_DIRECTIVE_OPTS = re.compile(r"^\s+:[a-zA-Z0-9_-]+:.*$", re.MULTILINE)
+_RE_ROLES = re.compile(r":[a-zA-Z0-9_-]+:`([^`]+)`")
+_RE_INLINE_LITERAL = re.compile(r"``(.+?)``")
+_RE_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_RE_EMPHASIS = re.compile(r"\*(.+?)\*")
+_RE_SUBST_REF = re.compile(r"\|([^|]+)\|")
+_RE_FOOTNOTE_REF = re.compile(r"\[#?[^\]]*\]_")
+_RE_HYPERLINK_REF = re.compile(r"`([^<]+)\s*<[^>]+>`_")
+_RE_ANON_HYPERLINK = re.compile(r"`([^`]+)`__?")
+_RE_SECTION_LINES = re.compile(r"^[=\-~`'^\"#\*\+\.]{3,}\s*$", re.MULTILINE)
+_RE_COMMENT_LINES = re.compile(r"^\.\.\s+[^:].*$", re.MULTILINE)
+_RE_TARGET_DEFS = re.compile(r"^\.\.\s_[^:]+:\s*.*$", re.MULTILINE)
+_RE_MULTI_NEWLINES = re.compile(r"\n{3,}")
+
 
 class RstParser:
     """Parse reStructuredText files, stripping markup for cleaner embeddings."""
@@ -25,31 +41,18 @@ class RstParser:
 
 def _strip_rst(text: str) -> str:
     """Strip reStructuredText markup for better embeddings."""
-    # Remove directive blocks (.. directive::) but keep their content
-    text = re.sub(r"^\.\. [a-zA-Z0-9_-]+::\s*.*$", "", text, flags=re.MULTILINE)
-    # Remove directive options (:option: value)
-    text = re.sub(r"^\s+:[a-zA-Z0-9_-]+:.*$", "", text, flags=re.MULTILINE)
-    # Remove role markers :role:`text` → text
-    text = re.sub(r":[a-zA-Z0-9_-]+:`([^`]+)`", r"\1", text)
-    # Remove inline literal ``text`` → text
-    text = re.sub(r"``(.+?)``", r"\1", text)
-    # Remove emphasis markers
-    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
-    text = re.sub(r"\*(.+?)\*", r"\1", text)
-    # Remove substitution references |text|
-    text = re.sub(r"\|([^|]+)\|", r"\1", text)
-    # Remove footnote/citation references [#name]_ or [name]_
-    text = re.sub(r"\[#?[^\]]*\]_", "", text)
-    # Remove hyperlink references `text <url>`_ → text
-    text = re.sub(r"`([^<]+)\s*<[^>]+>`_", r"\1", text)
-    # Remove anonymous hyperlink `text`__
-    text = re.sub(r"`([^`]+)`__?", r"\1", text)
-    # Remove section underline/overline characters
-    text = re.sub(r"^[=\-~`'^\"#\*\+\.]{3,}\s*$", "", text, flags=re.MULTILINE)
-    # Remove comment lines (.. comment)
-    text = re.sub(r"^\.\.\s+[^:].*$", "", text, flags=re.MULTILINE)
-    # Remove target definitions (.. _name:)
-    text = re.sub(r"^\.\. _[^:]+:\s*.*$", "", text, flags=re.MULTILINE)
-    # Collapse multiple blank lines
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _RE_DIRECTIVES.sub("", text)
+    text = _RE_DIRECTIVE_OPTS.sub("", text)
+    text = _RE_ROLES.sub(r"\1", text)
+    text = _RE_INLINE_LITERAL.sub(r"\1", text)
+    text = _RE_BOLD.sub(r"\1", text)
+    text = _RE_EMPHASIS.sub(r"\1", text)
+    text = _RE_SUBST_REF.sub(r"\1", text)
+    text = _RE_FOOTNOTE_REF.sub("", text)
+    text = _RE_HYPERLINK_REF.sub(r"\1", text)
+    text = _RE_ANON_HYPERLINK.sub(r"\1", text)
+    text = _RE_SECTION_LINES.sub("", text)
+    text = _RE_COMMENT_LINES.sub("", text)
+    text = _RE_TARGET_DEFS.sub("", text)
+    text = _RE_MULTI_NEWLINES.sub("\n\n", text)
     return text.strip()

@@ -11,6 +11,9 @@ from rag_kb.parsers.base import DocumentParser, ParsedDocument
 
 logger = logging.getLogger(__name__)
 
+_RE_XML_TAGS = re.compile(r"<[^>]+>")
+_RE_WHITESPACE = re.compile(r"\s+")
+
 
 class OdtParser:
     """Parse OpenDocument Text (.odt) files."""
@@ -102,6 +105,6 @@ def _extract_odf_text(file_path: Path) -> str:
 
     except Exception:
         # Fallback: crude XML tag stripping
-        text = re.sub(r"<[^>]+>", " ", content_xml)
-        text = re.sub(r"\s+", " ", text).strip()
+        text = _RE_XML_TAGS.sub(" ", content_xml)
+        text = _RE_WHITESPACE.sub(" ", text).strip()
         return text

@@ -7,6 +7,9 @@ from pathlib import Path
 
 from rag_kb.parsers.base import DocumentParser, ParsedDocument
 
+_RE_ERRORS = re.compile(r"\b(?:ERROR|FATAL|CRITICAL)\b", re.IGNORECASE)
+_RE_WARNINGS = re.compile(r"\bWARN(?:ING)?\b", re.IGNORECASE)
+
 
 class LogParser:
     """Parse log files, preserving structure and extracting metadata."""
@@ -18,8 +21,8 @@ class LogParser:
 
         # Count severity levels for metadata
         line_count = text.count("\n") + 1
-        error_count = len(re.findall(r"\b(?:ERROR|FATAL|CRITICAL)\b", text, re.IGNORECASE))
-        warning_count = len(re.findall(r"\bWARN(?:ING)?\b", text, re.IGNORECASE))
+        error_count = len(_RE_ERRORS.findall(text))
+        warning_count = len(_RE_WARNINGS.findall(text))
 
         return ParsedDocument(
             text=text,

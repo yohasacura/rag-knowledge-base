@@ -10,6 +10,10 @@ from rag_kb.parsers.base import DocumentParser, ParsedDocument
 
 logger = logging.getLogger(__name__)
 
+_RE_MULTI_NEWLINES = re.compile(r"\n{3,}")
+_RE_XML_TAGS = re.compile(r"<[^>]+>")
+_RE_WHITESPACE = re.compile(r"\s+")
+
 
 class XmlParser:
     """Parse XML files, extracting element text content."""
@@ -30,7 +34,7 @@ class XmlParser:
 
         text = "\n".join(lines)
         # Collapse multiple blank lines
-        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        text = _RE_MULTI_NEWLINES.sub("\n\n", text).strip()
 
         return ParsedDocument(
             text=text,
@@ -74,6 +78,6 @@ def _local_name(tag: str) -> str:
 
 def _strip_xml_tags(raw: str) -> list[str]:
     """Fallback: strip XML tags and return plain text lines."""
-    text = re.sub(r"<[^>]+>", " ", raw)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = _RE_XML_TAGS.sub(" ", raw)
+    text = _RE_WHITESPACE.sub(" ", text).strip()
     return [line.strip() for line in text.split(".") if line.strip()]

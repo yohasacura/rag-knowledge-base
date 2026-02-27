@@ -1,10 +1,7 @@
 """MCP Server — exposes RAG knowledge base tools via Model Context Protocol.
 
-Improvements:
-  - Hybrid search (vector + BM25 keyword fusion).
-  - Cross-encoder reranking for higher precision.
-  - MMR diversity filtering to avoid near-duplicate results.
-  - Advanced search tool with full control over search parameters.
+Thin adapter — all business logic is accessed via the daemon process
+through ``DaemonClient``.  The daemon is auto-started on first use.
 """
 
 from __future__ import annotations
@@ -12,81 +9,29 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from rag_kb.config import AppSettings, RagEntry, RagRegistry, safe_display_path
-from rag_kb.embedder import embed_query
-from rag_kb.indexer import Indexer, IndexingState
-from rag_kb.search import bm25_search, hybrid_fuse_scores, mmr_diversify, rerank_cross_encoder
-from rag_kb.sharing import export_rag, import_rag, peek_rag_file
-from rag_kb.vector_store import VectorStore
-from rag_kb.watcher import FolderWatcher
+from rag_kb.daemon_client import DaemonClient
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Application context shared across all tool calls
-# ---------------------------------------------------------------------------
-
-@dataclass
-class AppContext:
-    settings: AppSettings
-    registry: RagRegistry
-    store: VectorStore | None
-    watcher: FolderWatcher | None
-    active_rag: RagEntry | None
-    last_index_state: IndexingState | None = None
-
-
-def _open_store(entry: RagEntry | None, settings: AppSettings | None = None) -> VectorStore | None:
-    if entry is None:
-        return None
-    s = settings or AppSettings.load()
-    return VectorStore(
-        entry.db_path,
-        hnsw_ef_construction=s.hnsw_ef_construction,
-        hnsw_m=s.hnsw_m,
-    )
-
-
-def _start_watcher(entry: RagEntry | None, registry: RagRegistry, settings: AppSettings) -> FolderWatcher | None:
-    if entry is None or entry.is_imported or entry.detached or not entry.source_folders:
-        return None
-    w = FolderWatcher(entry, registry, settings)
-    w.start()
-    return w
-
-
-# ---------------------------------------------------------------------------
-# Lifespan
+# Lifespan — create and yield the DaemonClient
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
-async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
-    settings = AppSettings.load()
-    registry = RagRegistry()
-    active = registry.get_active()
-    store = _open_store(active, settings)
-    watcher = _start_watcher(active, registry, settings)
+async def app_lifespan(server: FastMCP) -> AsyncIterator[DaemonClient]:
+    client = DaemonClient()
+    client.ensure_daemon()
+    client.connect()
 
-    ctx = AppContext(
-        settings=settings,
-        registry=registry,
-        store=store,
-        watcher=watcher,
-        active_rag=active,
-    )
     try:
-        yield ctx
+        yield client
     finally:
-        if watcher:
-            watcher.stop()
-        if store is not None:
-            store.close(force=True)
+        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +44,7 @@ mcp = FastMCP(
         "This server provides semantic search over locally indexed documents.\n"
         "Typical workflows:\n"
         "- Search: use search_knowledge_base, then get_document_content with the returned source_file to read full documents.\n"
-        "- Browse: use list_indexed_files to see all files, then get_document_content for any file.\n"
+        "- Browse: use list_indexed_files to paginate through files, then get_document_content for any file.\n"
         "- Manage: use list_rags / switch_rag to work with multiple knowledge bases.\n"
         "- Create: use create_rag to create a new knowledge base, then reindex to build the index.\n"
         "- Share: use export_rag / import_rag to share knowledge bases as portable .rag files.\n"
@@ -110,18 +55,12 @@ mcp = FastMCP(
 
 
 # ---------------------------------------------------------------------------
-# Helper to get context
+# Helper to get the API from request context
 # ---------------------------------------------------------------------------
 
-def _ctx(ctx) -> AppContext:
-    """Extract AppContext from the request context."""
+def _client(ctx) -> DaemonClient:
+    """Extract the DaemonClient from the request context."""
     return ctx.request_context.lifespan_context
-
-
-def _ensure_store(app: AppContext) -> VectorStore:
-    if app.store is None:
-        raise RuntimeError("No active RAG database. Use switch_rag or create one first.")
-    return app.store
 
 
 # ---------------------------------------------------------------------------
@@ -140,135 +79,8 @@ def search_knowledge_base(query: str, n_results: int = 5, ctx: Context = None) -
     The returned source_file values can be passed directly to get_document_content
     to retrieve all chunks from that file.
     """
-    app = _ctx(ctx)
-    store = _ensure_store(app)
-    assert app.active_rag is not None
-    settings = app.settings
-
-    # Fetch more candidates for reranking
-    fetch_k = max(n_results * 4, 20)
-    query_emb = embed_query(query, model_name=app.active_rag.embedding_model)
-    vec_results = store.search(
-        query_emb,
-        n_results=fetch_k,
-        min_score=settings.min_score_threshold,
-        include_embeddings=settings.mmr_enabled,
-    )
-
-    if not vec_results:
-        return []
-
-    folders = app.active_rag.source_folders
-
-    # Hybrid search with BM25
-    if settings.hybrid_search_enabled:
-        try:
-            all_ids, all_texts, all_metas = store.get_all_documents()
-            if all_texts:
-                bm25_hits = bm25_search(query, all_texts, all_ids, top_k=fetch_k)
-                # Build score maps
-                vec_scores = {r.source_file + "::chunk_" + str(r.chunk_index): r.score for r in vec_results}
-                bm25_scores = {hit_id: score for hit_id, score in bm25_hits}
-                fused = hybrid_fuse_scores(vec_scores, bm25_scores, alpha=settings.hybrid_search_alpha)
-
-                # Rebuild results list with fused scores
-                all_results_map = {r.source_file + "::chunk_" + str(r.chunk_index): r for r in vec_results}
-                # Add BM25-only hits from store data
-                id_to_idx = {doc_id: i for i, doc_id in enumerate(all_ids)}
-                for hit_id, _ in bm25_hits:
-                    if hit_id not in all_results_map and hit_id in id_to_idx:
-                        idx = id_to_idx[hit_id]
-                        meta = all_metas[idx] if idx < len(all_metas) else {}
-                        from rag_kb.vector_store import SearchResult
-                        all_results_map[hit_id] = SearchResult(
-                            text=all_texts[idx],
-                            source_file=meta.get("source_file", ""),
-                            chunk_index=int(meta.get("chunk_index", 0)),
-                            score=0.0,
-                            metadata=meta,
-                        )
-
-                # Apply fused scores
-                for key, score in fused.items():
-                    if key in all_results_map:
-                        all_results_map[key].score = score
-
-                vec_results = sorted(all_results_map.values(), key=lambda r: r.score, reverse=True)[:fetch_k]
-        except Exception as exc:
-            logger.warning("BM25 hybrid search failed, falling back to vector only: %s", exc)
-
-    # Backfill embeddings for BM25-only hits when MMR is needed
-    if settings.mmr_enabled:
-        missing = [r for r in vec_results if r.embedding is None]
-        if missing:
-            try:
-                ids_needed = [
-                    r.source_file + "::chunk_" + str(r.chunk_index)
-                    for r in missing
-                ]
-                emb_map = store.get_embeddings_by_ids(ids_needed)
-                for r, doc_id in zip(missing, ids_needed):
-                    if doc_id in emb_map:
-                        r.embedding = emb_map[doc_id]
-            except Exception as exc:
-                logger.warning("Failed to backfill embeddings for MMR: %s", exc)
-
-    # Reranking
-    if settings.reranking_enabled:
-        try:
-            texts_for_rerank = [r.text for r in vec_results]
-            scores_for_rerank = [r.score for r in vec_results]
-            reranked = rerank_cross_encoder(
-                query, texts_for_rerank, scores_for_rerank,
-                model_name=settings.reranker_model,
-            )
-            reordered = [vec_results[idx] for idx, _ in reranked]
-            for res, (_, new_score) in zip(reordered, reranked):
-                res.score = new_score
-            vec_results = reordered
-        except Exception as exc:
-            logger.warning("Cross-encoder reranking failed: %s", exc)
-
-    # MMR diversity
-    if settings.mmr_enabled and len(vec_results) > n_results:
-        try:
-            import numpy as np
-            doc_embeddings = np.array(
-                [r.embedding for r in vec_results if r.embedding is not None],
-                dtype=np.float32,
-            )
-            if len(doc_embeddings) == len(vec_results):
-                mmr_indices = mmr_diversify(
-                    query_embedding=query_emb,
-                    doc_embeddings=doc_embeddings,
-                    scores=[r.score for r in vec_results],
-                    lambda_mult=settings.mmr_lambda,
-                    top_n=n_results,
-                )
-                final_results = [vec_results[i] for i in mmr_indices]
-            else:
-                logger.warning("MMR: some embeddings missing, falling back to top-N")
-                final_results = vec_results[:n_results]
-        except Exception as exc:
-            logger.warning("MMR diversity failed, falling back to top-N: %s", exc)
-            final_results = vec_results[:n_results]
-    else:
-        final_results = vec_results[:n_results]
-
-    # Apply minimum score threshold after all score transformations
-    min_thr = settings.min_score_threshold
-    if min_thr > 0:
-        final_results = [r for r in final_results if r.score >= min_thr]
-
-    return [
-        {
-            "text": r.text,
-            "source_file": safe_display_path(r.source_file, folders),
-            "score": round(r.score, 4),
-            "chunk_index": r.chunk_index,
-        }
-        for r in final_results
-    ]
+    client = _client(ctx)
+    return client.search(query=query, top_k=n_results)
 
 
 @mcp.tool()
@@ -278,54 +90,35 @@ def get_document_content(file_path: str, ctx: Context = None) -> list[dict[str, 
     Accepts the display path returned by search_knowledge_base or list_indexed_files
     (e.g. 'src/rag_kb/search.py'). Also accepts absolute paths.
     """
-    app = _ctx(ctx)
-    store = _ensure_store(app)
-
-    # Try direct lookup first (absolute path)
-    items = store.get_by_source(file_path)
-    if items:
-        return items
-
-    # Reverse-resolve: map display paths back to stored absolute paths
-    folders = app.active_rag.source_folders if app.active_rag else []
-    stored_sources = store.get_stats().files
-    # Normalise the input for comparison (backslash/forward-slash agnostic)
-    norm_input = file_path.replace("\\", "/").lower()
-    for stored in stored_sources:
-        display = safe_display_path(stored, folders)
-        if display.replace("\\", "/").lower() == norm_input:
-            return store.get_by_source(stored)
-
-    return []
+    client = _client(ctx)
+    return client.get_document_content(file_path)
 
 
 @mcp.tool()
-def list_indexed_files(ctx: Context = None) -> list[dict[str, Any]]:
-    """List all files currently indexed in the active RAG database.
+def list_indexed_files(
+    offset: int = 0,
+    limit: int = 100,
+    filter: str = "",
+    ctx: Context = None,
+) -> dict[str, Any]:
+    """List files currently indexed in the active RAG database (paginated).
 
     Returns file display paths and chunk counts. The file paths can be
     passed directly to get_document_content to retrieve their chunks.
+
+    Parameters:
+      offset: 0-based index of the first file to return (default 0).
+      limit: Maximum number of files per page (default 100, 0 = all).
+      filter: Case-insensitive substring filter on file paths.
+
+    Returns a dict with:
+      files: list of {file, chunk_count} entries for the current page.
+      total: total number of matching files.
+      offset: the offset that was applied.
+      limit: the limit that was applied.
     """
-    app = _ctx(ctx)
-    store = _ensure_store(app)
-    active = app.active_rag
-    folders = active.source_folders if active else []
-
-    # Build chunk counts from metadata in one query instead of O(n) queries
-    all_ids, _all_texts, all_metas = store.get_all_documents()
-    file_chunk_counts: dict[str, int] = {}
-    for meta in all_metas:
-        src = (meta or {}).get("source_file", "")
-        if src:
-            file_chunk_counts[src] = file_chunk_counts.get(src, 0) + 1
-
-    return [
-        {
-            "file": safe_display_path(src, folders),
-            "chunk_count": count,
-        }
-        for src, count in sorted(file_chunk_counts.items())
-    ]
+    client = _client(ctx)
+    return client.list_indexed_files(offset=offset, limit=limit, filter=filter)
 
 
 @mcp.tool()
@@ -335,22 +128,8 @@ def get_index_status(ctx: Context = None) -> dict[str, Any]:
     Returns: active_rag name, is_imported flag, total_files, total_chunks,
     watcher_running status, and (if available) last indexing status/timestamp/errors.
     """
-    app = _ctx(ctx)
-    active = app.active_rag
-    result: dict[str, Any] = {
-        "active_rag": active.name if active else None,
-        "is_imported": active.is_imported if active else None,
-    }
-    if app.store:
-        stats = app.store.get_stats()
-        result["total_files"] = stats.total_files
-        result["total_chunks"] = stats.total_chunks
-    if app.last_index_state:
-        result["last_status"] = app.last_index_state.status
-        result["last_indexed"] = app.last_index_state.last_indexed
-        result["errors"] = app.last_index_state.errors
-    result["watcher_running"] = app.watcher.is_running if app.watcher else False
-    return result
+    client = _client(ctx)
+    return client.get_index_status()
 
 
 @mcp.tool()
@@ -362,25 +141,50 @@ def reindex(full: bool = False, ctx: Context = None) -> dict[str, Any]:
 
     Returns: status, files_processed, total_chunks, duration_seconds, and errors.
     """
-    app = _ctx(ctx)
-    if app.active_rag is None:
-        raise RuntimeError("No active RAG database. Use switch_rag or create one first.")
-    if app.active_rag.detached:
-        raise RuntimeError(f"RAG '{app.active_rag.name}' is detached (read-only). Use detach_rag(detach=False) to re-enable.")
-    if app.active_rag.is_imported and not app.active_rag.source_folders:
-        raise RuntimeError("Cannot reindex an imported RAG with no source folders.")
-
-    indexer = Indexer(app.active_rag, app.registry, app.settings)
-    state = indexer.index(full=full)
-    app.last_index_state = state
-    app.store = _open_store(app.active_rag, app.settings)  # refresh store reference
+    client = _client(ctx)
+    result = client.index(full=full)
     return {
-        "status": state.status,
-        "files_processed": state.processed_files,
-        "total_chunks": state.total_chunks,
-        "duration_seconds": state.duration_seconds,
-        "errors": state.errors,
+        "status": result.get("status"),
+        "files_processed": result.get("processed_files"),
+        "total_chunks": result.get("total_chunks"),
+        "duration_seconds": result.get("duration_seconds"),
+        "errors": result.get("errors", []),
     }
+
+
+@mcp.tool()
+def cancel_indexing(ctx: Context = None) -> dict[str, Any]:
+    """Cancel a currently running indexing or re-indexing operation.
+
+    Cancellation is cooperative — the indexer will stop at the next safe
+    checkpoint. Files that were partially processed will be automatically
+    re-indexed on the next run.
+
+    Returns: cancelled (bool) indicating whether a running indexer was found.
+    """
+    client = _client(ctx)
+    return client.cancel_indexing()
+
+
+@mcp.tool()
+def verify_index_consistency(ctx: Context = None) -> dict[str, Any]:
+    """Verify that the manifest and vector store are consistent.
+
+    Checks for:
+    - Invalidated files (marked for re-indexing due to crash or cancellation)
+    - Orphan store files (in vector store but not in manifest)
+    - Orphan manifest files (in manifest but not in vector store)
+    - Incomplete indexing (lock file from a previous crash)
+
+    Returns a dict with:
+      ok: True if everything is consistent, False otherwise.
+      invalidated_files: list of files with empty content hash.
+      orphan_store_files: list of files in store but not in manifest.
+      orphan_manifest_files: list of files in manifest but not in store.
+      incomplete_indexing: True if a lock file was found.
+    """
+    client = _client(ctx)
+    return client.verify_index_consistency()
 
 
 @mcp.tool()
@@ -390,24 +194,8 @@ def list_rags(ctx: Context = None) -> list[dict[str, Any]]:
     Returns for each RAG: name, description, is_active, is_imported, detached,
     embedding_model, file_count, chunk_count, source_folders, and created_at.
     """
-    app = _ctx(ctx)
-    active_name = app.registry.get_active_name()
-    rags = app.registry.list_rags()
-    return [
-        {
-            "name": r.name,
-            "description": r.description,
-            "is_active": r.name == active_name,
-            "is_imported": r.is_imported,
-            "detached": r.detached,
-            "embedding_model": r.embedding_model,
-            "file_count": r.file_count,
-            "chunk_count": r.chunk_count,
-            "source_folders": r.source_folders,
-            "created_at": r.created_at,
-        }
-        for r in rags
-    ]
+    client = _client(ctx)
+    return client.list_rags()
 
 
 @mcp.tool()
@@ -417,21 +205,8 @@ def switch_rag(name: str, ctx: Context = None) -> dict[str, str]:
     Closes the current store and file watcher, then opens the new RAG.
     The file watcher is automatically restarted for local (non-imported, non-detached) RAGs.
     """
-    app = _ctx(ctx)
-    app.registry.set_active(name)
-
-    # Stop old watcher and close old store
-    if app.watcher:
-        app.watcher.stop()
-    if app.store is not None:
-        app.store.close()
-
-    # Load new RAG
-    entry = app.registry.get_rag(name)
-    app.active_rag = entry
-    app.store = _open_store(entry, app.settings)
-    app.watcher = _start_watcher(entry, app.registry, app.settings)
-
+    client = _client(ctx)
+    client.switch_rag(name)
     return {"active_rag": name, "status": "switched"}
 
 
@@ -442,9 +217,9 @@ def export_rag_tool(name: str, output_path: str, ctx: Context = None) -> dict[st
     output_path: Full file path for the export (e.g. 'C:/exports/my_rag.rag').
     The '.rag' extension is added automatically if missing.
     """
-    app = _ctx(ctx)
-    result_path = export_rag(app.registry, name, output_path)
-    return {"exported_to": result_path, "rag_name": name}
+    client = _client(ctx)
+    result = client.export_rag(name, output_path)
+    return {"exported_to": result.get("path", ""), "rag_name": name}
 
 
 @mcp.tool()
@@ -456,12 +231,11 @@ def import_rag_tool(file_path: str, name: str | None = None, ctx: Context = None
 
     Returns: imported_name, embedding_model, file_count, chunk_count, original_name.
     """
-    app = _ctx(ctx)
-    # Peek first to show info
-    info = peek_rag_file(file_path)
-    imported_name = import_rag(app.registry, file_path, new_name=name)
+    client = _client(ctx)
+    info = client.peek_rag_file(file_path)
+    result = client.import_rag(file_path, name=name)
     return {
-        "imported_name": imported_name,
+        "imported_name": result.get("name"),
         "embedding_model": info.get("embedding_model"),
         "file_count": info.get("file_count", 0),
         "chunk_count": info.get("chunk_count", 0),
@@ -479,18 +253,15 @@ def detach_rag(name: str | None = None, detach: bool = True, ctx: Context = None
 
     If name is omitted, operates on the currently active RAG.
     """
-    app = _ctx(ctx)
-    rag_name = name or (app.active_rag.name if app.active_rag else None)
+    client = _client(ctx)
+    rag_name = name or client.get_active_name()
     if not rag_name:
         raise RuntimeError("No RAG specified and no active RAG set.")
-    entry = app.registry.get_rag(rag_name)
-    entry.detached = detach
-    app.registry.update_rag(entry)
 
-    # Stop watcher if detaching the active RAG
-    if detach and app.active_rag and app.active_rag.name == rag_name and app.watcher:
-        app.watcher.stop()
-        app.watcher = None
+    if detach:
+        client.detach_rag(rag_name)
+    else:
+        client.attach_rag(rag_name)
 
     action = "detached" if detach else "re-attached"
     return {"rag": rag_name, "status": action}
@@ -513,18 +284,16 @@ def create_rag(
 
     After creating, use reindex() to build the search index.
     """
-    app = _ctx(ctx)
-    entry = app.registry.create_rag(
+    client = _client(ctx)
+    result = client.create_rag(
         name=name,
-        description=description,
         folders=source_folders,
+        description=description,
         embedding_model=embedding_model,
     )
     return {
-        "name": entry.name,
-        "description": entry.description,
-        "embedding_model": entry.embedding_model,
-        "source_folders": entry.source_folders,
+        "name": result.get("name"),
+        "db_path": result.get("db_path"),
         "status": "created",
     }
 
@@ -537,37 +306,113 @@ def delete_rag(name: str, confirm: bool = False, ctx: Context = None) -> dict[st
     If the deleted RAG is the active one, the server will switch to the
     next available RAG automatically.
     """
-    app = _ctx(ctx)
     if not confirm:
         raise ValueError(
             "Deletion requires explicit confirmation. "
             "Call delete_rag(name='...', confirm=True) to proceed."
         )
-
-    # If we're deleting the currently active RAG, close its store and
-    # watcher first so the files are released before deletion.
-    is_active = app.active_rag and app.active_rag.name == name
-    if is_active:
-        if app.watcher:
-            app.watcher.stop()
-            app.watcher = None
-        if app.store is not None:
-            app.store.close(force=True)
-            app.store = None
-        app.active_rag = None
-        import gc; gc.collect()
-
-    app.registry.delete_rag(name)
-
-    # If we just deleted the active RAG, switch to the new active (if any)
-    if is_active:
-        new_active = app.registry.get_active()
-        if new_active:
-            app.active_rag = new_active
-            app.store = _open_store(new_active, app.settings)
-            app.watcher = _start_watcher(new_active, app.registry, app.settings)
-
+    client = _client(ctx)
+    client.delete_rag(name)
     return {"rag": name, "status": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Model management tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def list_models(
+    model_type: str | None = None,
+    ctx: Context = None,
+) -> list[dict[str, Any]]:
+    """List all available embedding and reranker models with their status.
+
+    Returns model name, type, dimensions, max_tokens, provider, status
+    (bundled/downloaded/available/api), and description for each model.
+
+    Optionally filter by model_type: 'embedding' or 'reranker'.
+    """
+    client = _client(ctx)
+    return client.list_models(model_type=model_type)
+
+
+@mcp.tool()
+def get_model_info(model_name: str, ctx: Context = None) -> dict[str, Any]:
+    """Get detailed information about a specific model.
+
+    Returns all metadata including dimensions, max_tokens, description,
+    use_case_tags, license, trust requirements, and download status.
+    """
+    client = _client(ctx)
+    info = client.get_model_info(model_name)
+    if info is None:
+        raise ValueError(f"Model '{model_name}' not found in registry.")
+    return info
+
+
+# ---------------------------------------------------------------------------
+# Monitoring tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def get_monitoring_metrics(ctx: Context = None) -> dict[str, Any]:
+    """Get a comprehensive monitoring dashboard with system health, indexing,
+    search, and embedding aggregate metrics.
+
+    Returns system snapshot (CPU, memory, disk, uptime, connections),
+    indexing aggregates (total runs, avg duration, throughput, errors),
+    search aggregates (total queries, avg latency, avg top score),
+    embedding aggregates (total batches, avg time, throughput),
+    the last indexing run details, and vector store health info.
+    """
+    client = _client(ctx)
+    return client.get_metrics_dashboard()
+
+
+@mcp.tool()
+def get_indexing_history(limit: int = 10, ctx: Context = None) -> list[dict[str, Any]]:
+    """Get recent indexing run history with per-phase timing breakdown.
+
+    Each entry includes: rag_name, status, processed_files, total_chunks,
+    duration_seconds, scan/parse/chunk/embed/upsert/manifest seconds,
+    chunks_per_second, error_count, started_at.
+    """
+    client = _client(ctx)
+    return client.get_indexing_history(limit=limit)
+
+
+@mcp.tool()
+def get_search_stats(limit: int = 20, ctx: Context = None) -> list[dict[str, Any]]:
+    """Get recent search query performance stats.
+
+    Each entry includes: query_text, result_count, total_ms,
+    vector_search_ms, bm25_ms, rerank_ms, mmr_ms, top_score, timestamp.
+    """
+    client = _client(ctx)
+    return client.get_search_stats(limit=limit)
+
+
+@mcp.tool()
+def get_embedding_stats(limit: int = 20, ctx: Context = None) -> list[dict[str, Any]]:
+    """Get recent embedding batch performance stats.
+
+    Each entry includes: backend_type, model_name, batch_size,
+    dimension, duration_ms, chunks_per_second, device, timestamp.
+    """
+    client = _client(ctx)
+    return client.get_embedding_stats(limit=limit)
+
+
+@mcp.tool()
+def get_vector_store_details(ctx: Context = None) -> dict[str, Any]:
+    """Get detailed vector store / ChromaDB health information.
+
+    Returns total_chunks, total_files, db_size_mb, avg_chunks_per_file,
+    hnsw_config (space, construction_ef, M), db_path, and collection info.
+    """
+    client = _client(ctx)
+    return client.get_vector_store_details()
 
 
 # ---------------------------------------------------------------------------

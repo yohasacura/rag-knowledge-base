@@ -32,6 +32,11 @@
 - **Incremental indexing** — xxHash-based file manifest tracks changes at O(1) cost; unchanged files are skipped instantly
 - **Tuned HNSW** — configurable `ef_construction` and `M` parameters for ChromaDB's vector index
 
+### Reliability
+- **Cancellation** — cooperative cancellation of long-running indexing; partial work is safely cleaned up and re-indexed on the next run
+- **Crash recovery** — lock file detection and manifest invalidation; the daemon auto-runs an incremental reindex on startup if a previous crash is detected
+- **Index verification** — `rag-kb verify` checks manifest ↔ vector store consistency and reports orphaned/invalidated files
+
 ## Quick Start
 
 ### Install from PyPI
@@ -137,11 +142,18 @@ rag-kb import my-docs.rag --name received-docs
 | `rag-kb detach NAME` | Detach a RAG from source files (read-only mode) |
 | `rag-kb attach NAME` | Re-attach a detached RAG to its source files |
 | `rag-kb index [--rag NAME] [--workers N]` | Index documents (parallel, incremental) |
+| `rag-kb cancel-index` | Cancel a running indexing operation |
+| `rag-kb verify [--rag NAME]` | Verify index consistency (manifest vs vector store) |
+| `rag-kb search QUERY [-n N]` | Search the active RAG |
+| `rag-kb status [--rag NAME]` | Show index status and statistics |
+| `rag-kb files [--rag NAME]` | List indexed files |
 | `rag-kb export NAME --output FILE` | Export RAG to a `.rag` file |
 | `rag-kb import FILE [--name NAME]` | Import RAG from a `.rag` file |
 | `rag-kb serve [--http] [--port N]` | Start MCP server |
 | `rag-kb ui [--port N]` | Launch web dashboard |
 | `rag-kb config` | Show current configuration |
+| `rag-kb models list\|info\|download\|delete` | Manage embedding/reranker models |
+| `rag-kb daemon status\|stop\|restart\|logs` | Manage the background daemon |
 
 Use `-v` for verbose output: `rag-kb -v index`
 
@@ -156,10 +168,17 @@ When connected via MCP, the following tools are available:
 | `list_indexed_files` | List all indexed files with metadata |
 | `get_index_status` | Current indexing state and statistics |
 | `reindex` | Trigger re-indexing of the active RAG |
+| `cancel_indexing` | Cancel a running indexing operation |
+| `verify_index_consistency` | Check manifest ↔ vector store consistency |
 | `list_rags` | List all available RAG databases |
 | `switch_rag` | Switch the active RAG database |
+| `create_rag` | Create a new RAG knowledge base |
+| `delete_rag` | Permanently delete a RAG database |
 | `export_rag` | Export a RAG to a shareable file |
 | `import_rag` | Import a RAG from a shared file |
+| `detach_rag` | Detach/re-attach a RAG from source files |
+| `list_models` | List available embedding/reranker models |
+| `get_model_info` | Get detailed info about a model |
 
 ## Configuration
 
@@ -214,6 +233,48 @@ supported_extensions:
 # Server
 host: 127.0.0.1
 port: 8080
+```
+
+## Daemon Management
+
+The daemon is a background process that manages all data access. It starts automatically on first CLI use and shuts down after an idle timeout.
+
+```bash
+# Check daemon status
+rag-kb daemon status
+
+# View daemon logs
+rag-kb daemon logs
+
+# Follow logs in real-time (like tail -f)
+rag-kb daemon logs -f
+
+# Show last 100 lines
+rag-kb daemon logs -n 100
+
+# Restart the daemon
+rag-kb daemon restart
+
+# Stop the daemon
+rag-kb daemon stop
+```
+
+### Crash Recovery
+
+If indexing is interrupted (crash, power loss, kill), the daemon automatically detects and recovers on the next startup:
+
+1. **Lock file detection** — a `.indexing_lock` file in the RAG database marks active indexing
+2. **Manifest invalidation** — partially processed files are pre-marked so `is_changed()` returns `True`
+3. **Auto-recovery** — the daemon runs an incremental reindex on startup if a previous crash is detected
+
+You can also manually check index consistency:
+
+```bash
+# Verify manifest ↔ vector store consistency
+rag-kb verify
+
+# Repair by re-indexing
+rag-kb index
 ```
 
 ## Architecture

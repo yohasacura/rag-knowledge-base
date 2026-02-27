@@ -69,14 +69,18 @@ class FileManifest:
 
         Check order (fast → slow):
           1. Not in manifest → changed
-          2. mtime_ns differs → compute hash → compare
-          3. Hash matches    → unchanged
+          2. content_hash is empty (invalidated) → changed
+          3. mtime_ns differs → compute hash → compare
+          4. Hash matches    → unchanged
         """
         str_path = str(path)
         p = Path(path)
         row = self._get(str_path)
         if row is None:
             return True  # new file
+
+        if not row.content_hash:
+            return True  # invalidated — needs re-indexing
 
         try:
             current_mtime_ns = p.stat().st_mtime_ns
@@ -89,6 +93,58 @@ class FileManifest:
         # mtime changed — verify with content hash
         current_hash = self._hash_file(p)
         return current_hash != row.content_hash
+
+    def batch_filter_changed(self, paths: list[str]) -> list[str]:
+        """Return the subset of *paths* that are new or modified.
+
+        Optimised for 10K-100K files: fetches all known records in a
+        single SQLite query instead of N individual lookups.
+        Automatically chunks for SQLite variable-count limits.
+        """
+        if not paths:
+            return []
+
+        # Fetch all known records in batched queries
+        # (SQLite variable limit is 32766 in modern versions, use 5000 to be safe)
+        known: dict[str, tuple[int, str]] = {}
+        _SQL_BATCH = 5000
+        for i in range(0, len(paths), _SQL_BATCH):
+            sub = paths[i : i + _SQL_BATCH]
+            placeholders = ",".join("?" for _ in sub)
+            cur = self._conn.execute(
+                f"SELECT path, mtime_ns, content_hash FROM files WHERE path IN ({placeholders})",
+                sub,
+            )
+            for row in cur:
+                known[row[0]] = (row[1], row[2])
+
+        changed: list[str] = []
+        for p_str in paths:
+            rec = known.get(p_str)
+            if rec is None:
+                changed.append(p_str)  # new file
+                continue
+
+            mtime_ns_stored, content_hash = rec
+            if not content_hash:
+                changed.append(p_str)  # invalidated
+                continue
+
+            try:
+                current_mtime_ns = Path(p_str).stat().st_mtime_ns
+            except OSError:
+                changed.append(p_str)
+                continue
+
+            if current_mtime_ns == mtime_ns_stored:
+                continue  # unchanged (fast path)
+
+            # mtime changed — verify content hash
+            current_hash = self._hash_file(p_str)
+            if current_hash != content_hash:
+                changed.append(p_str)
+
+        return changed
 
     def mark_indexed(
         self,
@@ -118,9 +174,87 @@ class FileManifest:
         )
         self._conn.commit()
 
+    def batch_mark_indexed(
+        self,
+        records: list[tuple[str, int]],
+        last_indexed: str = "",
+    ) -> None:
+        """Batch-record that multiple files have been indexed.
+
+        *records* is a list of ``(path, chunk_count)`` tuples.
+        All rows are committed in a **single transaction** — orders of
+        magnitude faster than N individual commits for large batches.
+        """
+        if not records:
+            return
+        rows: list[tuple[str, int, str, int, str]] = []
+        for path_str, chunk_count in records:
+            p = Path(path_str)
+            try:
+                mtime_ns = p.stat().st_mtime_ns
+            except OSError:
+                mtime_ns = 0
+            content_hash = self._hash_file(p)
+            rows.append((path_str, mtime_ns, content_hash, chunk_count, last_indexed))
+
+        self._conn.executemany(
+            """
+            INSERT INTO files (path, mtime_ns, content_hash, chunk_count, last_indexed)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                mtime_ns     = excluded.mtime_ns,
+                content_hash = excluded.content_hash,
+                chunk_count  = excluded.chunk_count,
+                last_indexed = excluded.last_indexed
+            """,
+            rows,
+        )
+        self._conn.commit()
+
     def remove(self, path: str) -> None:
         """Remove a file from the manifest."""
         self._conn.execute("DELETE FROM files WHERE path = ?", (path,))
+        self._conn.commit()
+
+    def batch_remove(self, paths: list[str]) -> None:
+        """Remove multiple files in a single transaction."""
+        if not paths:
+            return
+        _SQL_BATCH = 5000
+        for i in range(0, len(paths), _SQL_BATCH):
+            sub = paths[i : i + _SQL_BATCH]
+            placeholders = ",".join("?" for _ in sub)
+            self._conn.execute(
+                f"DELETE FROM files WHERE path IN ({placeholders})", sub
+            )
+        self._conn.commit()
+
+    def invalidate(self, path: str | Path) -> None:
+        """Mark *path* as needing re-indexing (set content_hash to NULL).
+
+        This is called **before** deleting old chunks so that a crash
+        between deletion and re-insertion is recovered on the next run
+        (``is_changed()`` will return True for invalidated entries).
+        """
+        str_path = str(path)
+        self._conn.execute(
+            "UPDATE files SET content_hash = '' WHERE path = ?",
+            (str_path,),
+        )
+        self._conn.commit()
+
+    def batch_invalidate(self, paths: list[str]) -> None:
+        """Invalidate multiple files in a single transaction."""
+        if not paths:
+            return
+        _SQL_BATCH = 5000
+        for i in range(0, len(paths), _SQL_BATCH):
+            sub = paths[i : i + _SQL_BATCH]
+            placeholders = ",".join("?" for _ in sub)
+            self._conn.execute(
+                f"UPDATE files SET content_hash = '' WHERE path IN ({placeholders})",
+                sub,
+            )
         self._conn.commit()
 
     def all_paths(self) -> set[str]:

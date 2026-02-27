@@ -34,14 +34,24 @@ def _get_reranker(model_name: str) -> Any:
             ) from exc
 
         # Prefer a bundled / pre-downloaded model directory
-        from rag_kb.models import get_model_path
+        from rag_kb.models import get_model_path, get_model_spec
         resolved = get_model_path(model_name)
 
+        # Respect trust_remote_code from the registry
+        spec = get_model_spec(model_name)
+        trust = spec.trust_remote_code if spec else False
+
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+        from rag_kb.device import detect_device
+        device = detect_device()
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            _reranker_cache[model_name] = CrossEncoder(resolved, trust_remote_code=False)
-        logger.info("Cross-encoder '%s' loaded.", model_name)
+            _reranker_cache[model_name] = CrossEncoder(
+                resolved, trust_remote_code=trust, device=device,
+            )
+        logger.info("Cross-encoder '%s' loaded (device=%s).", model_name, device)
     return _reranker_cache[model_name]
 
 
@@ -64,6 +74,7 @@ def rerank_cross_encoder(
     if not texts:
         return []
 
+    logger.debug("Reranking %d texts with model '%s'", len(texts), model_name)
     reranker = _get_reranker(model_name)
     pairs = [[query, t] for t in texts]
     with warnings.catch_warnings():

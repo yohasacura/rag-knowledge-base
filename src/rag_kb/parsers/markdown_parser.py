@@ -11,6 +11,18 @@ from pathlib import Path
 
 from rag_kb.parsers.base import DocumentParser, ParsedDocument
 
+# Pre-compiled regex patterns (avoid re-compilation per file)
+_RE_TITLE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
+_RE_IMAGES = re.compile(r"!\[([^\]]*)\]\([^)]+\)")
+_RE_LINKS = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_RE_BOLD_STAR = re.compile(r"\*{1,3}(.+?)\*{1,3}")
+_RE_BOLD_UNDER = re.compile(r"_{1,3}(.+?)_{1,3}")
+_RE_CODE_FENCE = re.compile(r"```[a-zA-Z]*\n?")
+_RE_INLINE_CODE = re.compile(r"`(.+?)`")
+_RE_HRULE = re.compile(r"^[-*_]{3,}\s*$", re.MULTILINE)
+_RE_HTML_TAGS = re.compile(r"<[^>]+>")
+_RE_MULTI_NEWLINES = re.compile(r"\n{3,}")
+
 
 class MarkdownParser:
     """Parse Markdown files, preserving headings for structure-aware chunking."""
@@ -32,7 +44,7 @@ class MarkdownParser:
 
 def _extract_title(text: str, file_path: Path) -> str:
     """Extract document title from first H1 heading or filename."""
-    m = re.search(r"^#\s+(.+)$", text, re.MULTILINE)
+    m = _RE_TITLE.search(text)
     if m:
         return m.group(1).strip()
     return file_path.stem.replace("-", " ").replace("_", " ").title()
@@ -40,22 +52,14 @@ def _extract_title(text: str, file_path: Path) -> str:
 
 def _clean_markdown(text: str) -> str:
     """Light cleanup of markdown syntax — keeps headings for structural splitting."""
-    # Remove images
-    text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
-    # Convert links to just their text
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
-    # Remove emphasis markers but keep text
-    text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text)
-    text = re.sub(r"_{1,3}(.+?)_{1,3}", r"\1", text)
-    # Remove code fence markers (keep content)
-    text = re.sub(r"```[a-zA-Z]*\n?", "", text)
-    # Remove inline code backticks
-    text = re.sub(r"`(.+?)`", r"\1", text)
+    text = _RE_IMAGES.sub(r"\1", text)
+    text = _RE_LINKS.sub(r"\1", text)
+    text = _RE_BOLD_STAR.sub(r"\1", text)
+    text = _RE_BOLD_UNDER.sub(r"\1", text)
+    text = _RE_CODE_FENCE.sub("", text)
+    text = _RE_INLINE_CODE.sub(r"\1", text)
     # NOTE: Headings are KEPT for structure-aware chunking
-    # Remove horizontal rules
-    text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
-    # Remove HTML tags
-    text = re.sub(r"<[^>]+>", "", text)
-    # Collapse multiple blank lines
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _RE_HRULE.sub("", text)
+    text = _RE_HTML_TAGS.sub("", text)
+    text = _RE_MULTI_NEWLINES.sub("\n\n", text)
     return text.strip()

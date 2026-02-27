@@ -10,6 +10,10 @@ from rag_kb.parsers.base import DocumentParser, ParsedDocument
 
 logger = logging.getLogger(__name__)
 
+_RE_RTF_GROUPS = re.compile(r"[{\\][^{}]*[}]?")
+_RE_RTF_COMMANDS = re.compile(r"\\[a-z]+\d*\s?")
+_RE_MULTI_NEWLINES = re.compile(r"\n{3,}")
+
 
 class RtfParser:
     """Parse RTF files, converting to plain text."""
@@ -31,11 +35,11 @@ class RtfParser:
         except Exception as exc:
             logger.warning("RTF conversion failed for %s: %s", file_path, exc)
             # Fallback: crude RTF tag stripping
-            text = re.sub(r"[{\\][^{}]*[}]?", "", raw)
-            text = re.sub(r"\\[a-z]+\d*\s?", "", text)
+            text = _RE_RTF_GROUPS.sub("", raw)
+            text = _RE_RTF_COMMANDS.sub("", text)
 
         # Clean up whitespace
-        text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        text = _RE_MULTI_NEWLINES.sub("\n\n", text).strip()
 
         return ParsedDocument(
             text=text,

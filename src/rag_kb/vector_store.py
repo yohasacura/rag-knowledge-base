@@ -39,6 +39,8 @@ class StoreStats:
     total_chunks: int = 0
     total_files: int = 0
     files: list[str] = field(default_factory=list)
+    db_size_bytes: int = 0
+    avg_chunks_per_file: float = 0.0
 
 
 class VectorStore:
@@ -140,18 +142,17 @@ class VectorStore:
         if not ids:
             return
 
-        # ChromaDB expects list-of-lists; convert numpy if needed
-        if isinstance(embeddings, np.ndarray):
-            emb_list = embeddings.tolist()
-        else:
-            emb_list = embeddings
+        # ChromaDB accepts numpy ndarrays directly (>= 0.4); avoid the
+        # expensive .tolist() conversion that allocates millions of
+        # Python float objects for large batches.
+        emb: list[list[float]] | np.ndarray = embeddings
 
         batch = 10_000
         for i in range(0, len(ids), batch):
             self._collection.upsert(
                 ids=ids[i : i + batch],
                 documents=texts[i : i + batch],
-                embeddings=emb_list[i : i + batch],
+                embeddings=emb[i : i + batch],
                 metadatas=metadatas[i : i + batch],
             )
         logger.debug("Upserted %d chunks", len(ids))
@@ -165,6 +166,45 @@ class VectorStore:
         logger.debug("Deleted %d chunks for %s", len(chunk_ids), source_file)
         return len(chunk_ids)
 
+    def batch_delete_by_sources(self, source_files: list[str]) -> int:
+        """Delete all chunks belonging to any of the given *source_files*.
+
+        Far more efficient than calling ``delete_by_source()`` N times:
+        uses a single ``$in`` query for smaller batches or a scan-and-filter
+        for larger ones, minimising ChromaDB round-trips.
+
+        Returns the total number of chunks deleted.
+        """
+        if not source_files:
+            return 0
+
+        total_deleted = 0
+        # ChromaDB $in operator has a practical limit; process in groups of 100
+        batch = 100
+        for i in range(0, len(source_files), batch):
+            sub = source_files[i : i + batch]
+            try:
+                if len(sub) == 1:
+                    where_clause: dict = {"source_file": sub[0]}
+                else:
+                    where_clause = {"source_file": {"$in": sub}}
+                results = self._collection.get(where=where_clause)
+                chunk_ids = results["ids"]
+                if chunk_ids:
+                    # ChromaDB delete also has limits; sub-batch if needed
+                    del_batch = 10_000
+                    for j in range(0, len(chunk_ids), del_batch):
+                        self._collection.delete(ids=chunk_ids[j : j + del_batch])
+                    total_deleted += len(chunk_ids)
+            except Exception as exc:
+                logger.warning("batch_delete_by_sources failed for sub-batch: %s", exc)
+                # Fallback: delete one by one
+                for src in sub:
+                    total_deleted += self.delete_by_source(src)
+        logger.debug("Batch-deleted %d chunks for %d source files",
+                     total_deleted, len(source_files))
+        return total_deleted
+
     def get_embeddings_by_ids(self, ids: list[str]) -> dict[str, list[float]]:
         """Return stored embeddings for the given document *ids*.
 
@@ -174,7 +214,7 @@ class VectorStore:
             return {}
         results = self._collection.get(ids=ids, include=["embeddings"])
         out: dict[str, list[float]] = {}
-        if results["ids"] and results["embeddings"]:
+        if results["ids"] and results["embeddings"] is not None and len(results["embeddings"]) > 0:
             for doc_id, emb in zip(results["ids"], results["embeddings"]):
                 if emb is not None:
                     out[doc_id] = emb
@@ -289,14 +329,70 @@ class VectorStore:
                     sources.add(src)
         return sorted(sources)
 
+    def list_files_with_counts(self) -> dict[str, int]:
+        """Return ``{source_file: chunk_count}`` for every file in the store.
+
+        Only fetches metadata (no texts or embeddings), so this is
+        significantly cheaper than ``get_all_documents()`` for large collections.
+        """
+        results = self._collection.get(include=["metadatas"])
+        counts: dict[str, int] = {}
+        if results["metadatas"]:
+            for meta in results["metadatas"]:
+                src = (meta or {}).get("source_file", "")
+                if src:
+                    counts[src] = counts.get(src, 0) + 1
+        return counts
+
     def get_stats(self) -> StoreStats:
         """Return aggregate statistics."""
         sources = self.list_sources()
+        total_chunks = self._collection.count()
+        total_files = len(sources)
+        db_size = self._get_db_size()
+        avg_cpf = round(total_chunks / total_files, 1) if total_files else 0.0
         return StoreStats(
-            total_chunks=self._collection.count(),
-            total_files=len(sources),
+            total_chunks=total_chunks,
+            total_files=total_files,
             files=sources,
+            db_size_bytes=db_size,
+            avg_chunks_per_file=avg_cpf,
         )
+
+    def get_detailed_stats(self) -> dict[str, Any]:
+        """Return extended stats including HNSW config and DB size."""
+        stats = self.get_stats()
+        hnsw_config = {}
+        try:
+            meta = self._collection.metadata or {}
+            hnsw_config = {
+                "space": meta.get("hnsw:space", "cosine"),
+                "construction_ef": meta.get("hnsw:construction_ef", "?"),
+                "M": meta.get("hnsw:M", "?"),
+            }
+        except Exception:
+            pass
+        return {
+            "total_chunks": stats.total_chunks,
+            "total_files": stats.total_files,
+            "db_size_bytes": stats.db_size_bytes,
+            "db_size_mb": round(stats.db_size_bytes / (1024 * 1024), 2),
+            "avg_chunks_per_file": stats.avg_chunks_per_file,
+            "collection_name": self.COLLECTION_NAME,
+            "db_path": self._db_path,
+            "hnsw_config": hnsw_config,
+        }
+
+    def _get_db_size(self) -> int:
+        """Return total size of the ChromaDB directory in bytes."""
+        try:
+            return sum(
+                f.stat().st_size
+                for f in Path(self._db_path).rglob("*")
+                if f.is_file()
+            )
+        except Exception:
+            return 0
 
     def count(self) -> int:
         return self._collection.count()

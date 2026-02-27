@@ -17,6 +17,12 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
+# Pre-compiled patterns (avoid re-compilation per file)
+_RE_MD_HEADING = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+_RE_CODE_PYTHON = re.compile(r"^((?:async\s+)?def\s+\w+|class\s+\w+)", re.MULTILINE)
+_RE_CODE_JSTS = re.compile(r"^(?:export\s+)?(?:function\s+\w+|class\s+\w+|const\s+\w+\s*=)", re.MULTILINE)
+_RE_PDF_PAGE = re.compile(r"\[PAGE\s+(\d+)\]")
+
 
 @dataclass
 class TextChunk:
@@ -83,8 +89,7 @@ def split_by_structure(
 
 def _split_markdown_sections(text: str) -> list[Section]:
     """Split Markdown into sections by headings (## or ###)."""
-    pattern = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
-    matches = list(pattern.finditer(text))
+    matches = list(_RE_MD_HEADING.finditer(text))
 
     if not matches:
         return [Section(heading="", text=text, start_char=0)]
@@ -128,12 +133,7 @@ def _split_markdown_sections(text: str) -> list[Section]:
 
 def _split_code_sections(text: str) -> list[Section]:
     """Split code into sections by top-level function/class definitions."""
-    patterns = [
-        # Python: def / class at column 0
-        re.compile(r"^((?:async\s+)?def\s+\w+|class\s+\w+)", re.MULTILINE),
-        # JS/TS: function / export function / const … = / class
-        re.compile(r"^(?:export\s+)?(?:function\s+\w+|class\s+\w+|const\s+\w+\s*=)", re.MULTILINE),
-    ]
+    patterns = [_RE_CODE_PYTHON, _RE_CODE_JSTS]
 
     matches: list[re.Match] = []
     for pat in patterns:
@@ -174,8 +174,7 @@ def _split_code_sections(text: str) -> list[Section]:
 
 def _split_pdf_sections(text: str) -> list[Section]:
     """Split PDF text by page markers inserted by the PDF parser."""
-    pattern = re.compile(r"\[PAGE\s+(\d+)\]")
-    matches = list(pattern.finditer(text))
+    matches = list(_RE_PDF_PAGE.finditer(text))
 
     if not matches:
         return [Section(heading="", text=text, start_char=0)]

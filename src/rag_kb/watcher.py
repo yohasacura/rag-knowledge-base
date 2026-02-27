@@ -6,10 +6,12 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
+
+from rag_kb.skip_patterns import is_skipped_path
 
 if TYPE_CHECKING:
     from rag_kb.config import AppSettings, RagEntry, RagRegistry
@@ -29,17 +31,21 @@ class _RagEventHandler(FileSystemEventHandler):
         registry: "RagRegistry",
         settings: "AppSettings",
         supported_extensions: set[str],
+        on_change: "Callable[[list[str]], None] | None" = None,
     ) -> None:
         super().__init__()
         self._rag = rag_entry
         self._registry = registry
         self._settings = settings
         self._exts = supported_extensions
+        self._on_change = on_change
         self._pending: dict[str, float] = {}  # path → timestamp
         self._lock = threading.Lock()
         self._timer: threading.Timer | None = None
 
     def _is_relevant(self, path: str) -> bool:
+        if is_skipped_path(path):
+            return False
         return Path(path).suffix.lower() in self._exts
 
     def on_created(self, event: FileSystemEvent) -> None:
@@ -64,6 +70,7 @@ class _RagEventHandler(FileSystemEventHandler):
     def _schedule(self, path: str) -> None:
         with self._lock:
             self._pending[path] = time.monotonic()
+            logger.debug("File change scheduled: %s (%d pending)", path, len(self._pending))
             if self._timer:
                 self._timer.cancel()
             self._timer = threading.Timer(_DEBOUNCE_SECONDS, self._flush)
@@ -79,6 +86,18 @@ class _RagEventHandler(FileSystemEventHandler):
             return
 
         logger.info("File changes detected, re-indexing %d file(s)…", len(paths))
+
+        # If an external callback was provided (e.g. by the daemon), use it
+        # instead of creating a local Indexer — this avoids cross-process
+        # contention on shared data files.
+        if self._on_change is not None:
+            try:
+                self._on_change(paths)
+            except Exception as exc:
+                logger.error("Watcher on_change callback error: %s", exc)
+            return
+
+        # Fallback: direct indexing (used when running in-process)
         try:
             from rag_kb.indexer import Indexer
 
@@ -100,10 +119,12 @@ class FolderWatcher:
         rag_entry: "RagEntry",
         registry: "RagRegistry",
         settings: "AppSettings",
+        on_change: Callable[[list[str]], None] | None = None,
     ) -> None:
         self._rag = rag_entry
         self._registry = registry
         self._settings = settings
+        self._on_change = on_change
         self._observer: Observer | None = None
         self._running = False
 
@@ -122,7 +143,10 @@ class FolderWatcher:
             return
 
         exts = set(self._settings.supported_extensions)
-        handler = _RagEventHandler(self._rag, self._registry, self._settings, exts)
+        handler = _RagEventHandler(
+            self._rag, self._registry, self._settings, exts,
+            on_change=self._on_change,
+        )
 
         self._observer = Observer()
         for folder in self._rag.source_folders:

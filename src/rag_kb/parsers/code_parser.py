@@ -7,6 +7,12 @@ from pathlib import Path
 
 from rag_kb.parsers.base import DocumentParser, ParsedDocument
 
+# Pre-compiled regex patterns for doc-comment extraction
+_RE_PY_DOCSTRING_DQ = re.compile(r'"""(.*?)"""', re.DOTALL)
+_RE_PY_DOCSTRING_SQ = re.compile(r"'''(.*?)'''", re.DOTALL)
+_RE_C_BLOCK_COMMENT = re.compile(r"/\*\*?(.*?)\*/", re.DOTALL)
+_RE_C_COMMENT_STARS = re.compile(r"^\s*\*\s?", re.MULTILINE)
+
 # Extension → language name mapping
 _LANG_MAP: dict[str, str] = {
     ".py": "python",
@@ -143,9 +149,9 @@ def _extract_doc_summary(text: str, lang: str) -> str:
 
     # Python docstrings
     if lang == "python":
-        m = re.search(r'"""(.*?)"""', header, re.DOTALL)
+        m = _RE_PY_DOCSTRING_DQ.search(header)
         if not m:
-            m = re.search(r"'''(.*?)'''", header, re.DOTALL)
+            m = _RE_PY_DOCSTRING_SQ.search(header)
         if m:
             return m.group(1).strip()[:200]
 
@@ -154,11 +160,11 @@ def _extract_doc_summary(text: str, lang: str) -> str:
         "javascript", "typescript", "java", "c", "cpp", "csharp",
         "go", "rust", "kotlin", "scala", "swift", "dart", "php",
     ):
-        m = re.search(r"/\*\*?(.*?)\*/", header, re.DOTALL)
+        m = _RE_C_BLOCK_COMMENT.search(header)
         if m:
             comment = m.group(1)
             # Strip leading * from each line
-            comment = re.sub(r"^\s*\*\s?", "", comment, flags=re.MULTILINE)
+            comment = _RE_C_COMMENT_STARS.sub("", comment)
             return comment.strip()[:200]
 
     # Hash-style comments (shell, Ruby, Perl, Python, R)
