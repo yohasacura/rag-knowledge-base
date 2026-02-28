@@ -31,7 +31,7 @@ class _RagEventHandler(FileSystemEventHandler):
         registry: "RagRegistry",
         settings: "AppSettings",
         supported_extensions: set[str],
-        on_change: "Callable[[list[str]], None] | None" = None,
+        on_change: "Callable[[list[str], list[str]], None] | None" = None,
     ) -> None:
         super().__init__()
         self._rag = rag_entry
@@ -39,7 +39,8 @@ class _RagEventHandler(FileSystemEventHandler):
         self._settings = settings
         self._exts = supported_extensions
         self._on_change = on_change
-        self._pending: dict[str, float] = {}  # path → timestamp
+        # path → (event_type, timestamp)  event_type: "change" | "delete"
+        self._pending: dict[str, tuple[str, float]] = {}
         self._lock = threading.Lock()
         self._timer: threading.Timer | None = None
 
@@ -50,27 +51,27 @@ class _RagEventHandler(FileSystemEventHandler):
 
     def on_created(self, event: FileSystemEvent) -> None:
         if not event.is_directory and self._is_relevant(event.src_path):
-            self._schedule(event.src_path)
+            self._schedule(event.src_path, "change")
 
     def on_modified(self, event: FileSystemEvent) -> None:
         if not event.is_directory and self._is_relevant(event.src_path):
-            self._schedule(event.src_path)
+            self._schedule(event.src_path, "change")
 
     def on_deleted(self, event: FileSystemEvent) -> None:
         if not event.is_directory and self._is_relevant(event.src_path):
-            self._schedule(event.src_path)
+            self._schedule(event.src_path, "delete")
 
     def on_moved(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
             if hasattr(event, "src_path") and self._is_relevant(event.src_path):
-                self._schedule(event.src_path)
+                self._schedule(event.src_path, "delete")
             if hasattr(event, "dest_path") and self._is_relevant(event.dest_path):
-                self._schedule(event.dest_path)
+                self._schedule(event.dest_path, "change")
 
-    def _schedule(self, path: str) -> None:
+    def _schedule(self, path: str, event_type: str) -> None:
         with self._lock:
-            self._pending[path] = time.monotonic()
-            logger.debug("File change scheduled: %s (%d pending)", path, len(self._pending))
+            self._pending[path] = (event_type, time.monotonic())
+            logger.debug("File %s scheduled: %s (%d pending)", event_type, path, len(self._pending))
             if self._timer:
                 self._timer.cancel()
             self._timer = threading.Timer(_DEBOUNCE_SECONDS, self._flush)
@@ -79,20 +80,27 @@ class _RagEventHandler(FileSystemEventHandler):
 
     def _flush(self) -> None:
         with self._lock:
-            paths = list(self._pending.keys())
+            pending_snapshot = dict(self._pending)
             self._pending.clear()
 
-        if not paths:
+        if not pending_snapshot:
             return
 
-        logger.info("File changes detected, re-indexing %d file(s)…", len(paths))
+        # Separate changed files from deleted files
+        changed_paths = [p for p, (evt, _) in pending_snapshot.items() if evt == "change"]
+        deleted_paths = [p for p, (evt, _) in pending_snapshot.items() if evt == "delete"]
+
+        logger.info(
+            "File changes detected: %d to re-index, %d to remove",
+            len(changed_paths), len(deleted_paths),
+        )
 
         # If an external callback was provided (e.g. by the daemon), use it
         # instead of creating a local Indexer — this avoids cross-process
         # contention on shared data files.
         if self._on_change is not None:
             try:
-                self._on_change(paths)
+                self._on_change(changed_paths, deleted_paths)
             except Exception as exc:
                 logger.error("Watcher on_change callback error: %s", exc)
             return
@@ -102,11 +110,17 @@ class _RagEventHandler(FileSystemEventHandler):
             from rag_kb.indexer import Indexer
 
             indexer = Indexer(self._rag, self._registry, self._settings)
-            for p in paths:
+            for p in changed_paths:
                 try:
                     indexer.index_single_file_by_path(p)
                 except Exception as exc:
                     logger.warning("Watcher: error re-indexing %s: %s", p, exc)
+            for p in deleted_paths:
+                try:
+                    indexer.remove_file(p)
+                    logger.info("Watcher: removed chunks for deleted file %s", p)
+                except Exception as exc:
+                    logger.warning("Watcher: error removing %s: %s", p, exc)
         except Exception as exc:
             logger.error("Watcher flush error: %s", exc)
 
@@ -119,7 +133,7 @@ class FolderWatcher:
         rag_entry: "RagEntry",
         registry: "RagRegistry",
         settings: "AppSettings",
-        on_change: Callable[[list[str]], None] | None = None,
+        on_change: Callable[[list[str], list[str]], None] | None = None,
     ) -> None:
         self._rag = rag_entry
         self._registry = registry

@@ -20,6 +20,7 @@ import os
 import signal
 import socket
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,7 @@ def _patch_proactor_connection_lost() -> None:
 # ---------------------------------------------------------------------------
 
 _client = None  # DaemonClient instance
+_client_lock = threading.Lock()  # serialises _safe_call to prevent close-during-use races
 _auto_refresh_interval = 10  # seconds
 
 
@@ -137,46 +139,51 @@ def _get_client():
 
 
 def _safe_call(method, *args, **kwargs):
-    """Call a DaemonClient method with error handling and auto-reconnect."""
+    """Call a DaemonClient method with error handling and auto-reconnect.
+
+    A global lock serialises all calls so that a reconnect cycle in one
+    thread cannot close the socket while another thread is mid-call.
+    """
     from rag_kb.rpc_protocol import RpcError
-    try:
-        client = _get_client()
-        fn = getattr(client, method)
-        return fn(*args, **kwargs)
-    except RpcError:
-        # Application-level error from the daemon (e.g. "not found") —
-        # the connection is fine, propagate directly.
-        raise
-    except Exception as exc:
-        logger.warning("RPC call %s failed: %s — reconnecting", method, exc)
-        global _client
-        # If stale daemon detected, force-kill it so ensure_daemon spawns fresh
-        _is_stale = "unframed JSON" in str(exc) or "stale daemon" in str(exc)
-        if _is_stale:
-            logger.warning("Stale daemon detected — killing and restarting")
-            try:
-                from rag_kb.daemon_client import _PID_FILE
-                if _PID_FILE.exists():
-                    pid = int(_PID_FILE.read_text(encoding="utf-8").strip())
-                    os.kill(pid, signal.SIGTERM)
-                    _PID_FILE.unlink(missing_ok=True)
-            except Exception:
-                pass
-            time.sleep(2)
-        try:
-            if _client:
-                _client.close()
-        except Exception:
-            pass
-        _client = None
-        # Retry once with a fresh daemon
+    with _client_lock:
         try:
             client = _get_client()
             fn = getattr(client, method)
             return fn(*args, **kwargs)
-        except Exception as exc2:
-            logger.error("RPC call %s failed after reconnect: %s", method, exc2)
+        except RpcError:
+            # Application-level error from the daemon (e.g. "not found") —
+            # the connection is fine, propagate directly.
             raise
+        except Exception as exc:
+            logger.warning("RPC call %s failed: %s — reconnecting", method, exc)
+            global _client
+            # If stale daemon detected, force-kill it so ensure_daemon spawns fresh
+            _is_stale = "unframed JSON" in str(exc) or "stale daemon" in str(exc)
+            if _is_stale:
+                logger.warning("Stale daemon detected — killing and restarting")
+                try:
+                    from rag_kb.daemon_client import _PID_FILE
+                    if _PID_FILE.exists():
+                        pid = int(_PID_FILE.read_text(encoding="utf-8").strip())
+                        os.kill(pid, signal.SIGTERM)
+                        _PID_FILE.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                time.sleep(2)
+            try:
+                if _client:
+                    _client.close()
+            except Exception:
+                pass
+            _client = None
+            # Retry once with a fresh daemon
+            try:
+                client = _get_client()
+                fn = getattr(client, method)
+                return fn(*args, **kwargs)
+            except Exception as exc2:
+                logger.error("RPC call %s failed after reconnect: %s", method, exc2)
+                raise
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +521,7 @@ class DashboardPage:
 
     async def refresh(self):
         try:
-            rags = await run.io_bound(lambda: _safe_call("list_rags"))
+            rags = await run.io_bound(lambda: _safe_call("list_rags")) or []
             active = next((r for r in rags if r.get("is_active")), None)
             total_files = sum(r.get("file_count", 0) for r in rags)
             total_chunks = sum(r.get("chunk_count", 0) for r in rags)
@@ -559,7 +566,7 @@ class DashboardPage:
         try:
             dashboard = await run.io_bound(
                 lambda: _safe_call("get_metrics_dashboard")
-            )
+            ) or {}
             idx = dashboard.get("indexing_aggregates") or {}
             srch = dashboard.get("search_aggregates") or {}
             emb = dashboard.get("embedding_aggregates") or {}
@@ -767,7 +774,7 @@ class ManagePage:
 
     async def refresh(self):
         try:
-            rags = await run.io_bound(lambda: _safe_call("list_rags"))
+            rags = await run.io_bound(lambda: _safe_call("list_rags")) or []
             rows = []
             for r in rags:
                 status_parts = []
@@ -886,7 +893,6 @@ class ManagePage:
             async def _remove_folder(folder: str):
                 if folder in current_folders:
                     current_folders.remove(folder)
-                    _refresh_folder_list()
                     try:
                         await run.io_bound(
                             lambda: _safe_call(
@@ -894,12 +900,13 @@ class ManagePage:
                             )
                         )
                         ui.notify(f"Removed folder", type="positive")
+                        _refresh_folder_list()
                         await self.refresh()
                     except Exception as exc:
                         # Revert on failure
                         current_folders.append(folder)
-                        _refresh_folder_list()
                         ui.notify(f"Error: {exc}", type="negative")
+                        _refresh_folder_list()
 
             async def _add_folder(path: str):
                 path = path.strip()
@@ -921,8 +928,8 @@ class ManagePage:
                     await self.refresh()
                 except Exception as exc:
                     current_folders.remove(path)
-                    _refresh_folder_list()
                     ui.notify(f"Error: {exc}", type="negative")
+                    _refresh_folder_list()
 
             _refresh_folder_list()
 
@@ -1470,7 +1477,7 @@ class IndexingPage:
 
     async def refresh(self):
         try:
-            status = await run.io_bound(lambda: _safe_call("get_index_status"))
+            status = await run.io_bound(lambda: _safe_call("get_index_status")) or {}
             active = status.get("active_rag")
 
             self._info_container.clear()
@@ -1816,21 +1823,30 @@ class ModelsPage:
     async def _refresh(self):
         if self._container is None:
             return
-        # Show skeleton while loading
-        self._container.clear()
-        with self._container:
-            _skeleton_model_cards(3)
         try:
-            models = await run.io_bound(lambda: _safe_call("list_models"))
+            # Show skeleton while loading
+            self._container.clear()
+            with self._container:
+                _skeleton_model_cards(3)
+        except RuntimeError:
+            return  # UI elements deleted (client navigated away)
+        try:
+            models = await run.io_bound(lambda: _safe_call("list_models")) or []
             if self._filter_type != "all":
                 models = [m for m in models if m.get("type") == self._filter_type]
         except Exception as exc:
-            self._container.clear()
-            with self._container:
-                ui.label(f"Error loading models: {exc}").classes("text-red-400")
+            try:
+                self._container.clear()
+                with self._container:
+                    ui.label(f"Error loading models: {exc}").classes("text-red-400")
+            except RuntimeError:
+                pass  # UI elements deleted
             return
 
-        self._container.clear()
+        try:
+            self._container.clear()
+        except RuntimeError:
+            return  # UI elements deleted (client navigated away)
         with self._container:
             if not models:
                 ui.label("No models found.").classes("text-gray-400")
@@ -2067,19 +2083,28 @@ class ConfigPage:
 
     async def _build_form(self):
         # Show skeleton while loading settings
-        self._form_container.clear()
-        with self._form_container:
-            _skeleton_config_form()
         try:
-            settings = await run.io_bound(lambda: _safe_call("get_settings"))
-        except Exception as exc:
             self._form_container.clear()
             with self._form_container:
-                ui.label(f"Error loading settings: {exc}").classes("text-red-400")
+                _skeleton_config_form()
+        except RuntimeError:
+            return  # UI elements deleted (client navigated away)
+        try:
+            settings = await run.io_bound(lambda: _safe_call("get_settings")) or {}
+        except Exception as exc:
+            try:
+                self._form_container.clear()
+                with self._form_container:
+                    ui.label(f"Error loading settings: {exc}").classes("text-red-400")
+            except RuntimeError:
+                pass  # UI elements deleted
             return
 
         self._inputs.clear()
-        self._form_container.clear()
+        try:
+            self._form_container.clear()
+        except RuntimeError:
+            return  # UI elements deleted (client navigated away)
         with self._form_container:
             # --- Embedding & Chunking ---
             ui.label("Embedding & Chunking").classes("config-section-title")

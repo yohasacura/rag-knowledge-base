@@ -404,7 +404,7 @@ class Indexer:
         """Index (or re-index) a single file by its path.
 
         If the RAG is detached the call is silently skipped.
-        If the file no longer exists the call is silently skipped.
+        If the file no longer exists its chunks are removed from the index.
         """
         if self.rag.detached:
             return
@@ -412,7 +412,9 @@ class Indexer:
         if fp.exists():
             self._index_single_file(fp)
         else:
-            logger.info("File not found, keeping existing chunks: %s", fp)
+            logger.info("File not found, removing chunks: %s", fp)
+            self.store.delete_by_source(file_path)
+            self.manifest.remove(file_path)
         self._update_registry_stats()
 
     def remove_file(self, file_path: str) -> None:
@@ -553,6 +555,28 @@ class Indexer:
 
             texts = [c.text for c in all_chunks]
 
+            # Validate: drop chunks whose texts are not proper non-empty strings.
+            # Malformed PDF / parser output can produce None or non-str values
+            # which crash the tokeniser ("TextEncodeInput" TypeError).
+            valid = []
+            for i, t in enumerate(texts):
+                if isinstance(t, str) and t.strip():
+                    valid.append(i)
+                else:
+                    logger.warning(
+                        "Dropping chunk %d (source=%s): invalid text type=%s",
+                        all_chunks[i].chunk_index,
+                        all_chunks[i].source_file,
+                        type(t).__name__,
+                    )
+            if len(valid) < len(all_chunks):
+                all_chunks = [all_chunks[i] for i in valid]
+                texts = [texts[i] for i in valid]
+
+            if not all_chunks:
+                logger.debug("All chunks filtered — skipping embed/upsert")
+                return
+
             # Sub-batch for cancellation checks; keep numpy arrays
             import numpy as _np
             t_embed = time.monotonic()
@@ -560,12 +584,31 @@ class Indexer:
             for sub_start in range(0, len(texts), embed_batch):
                 self._check_cancelled()
                 sub_texts = texts[sub_start : sub_start + embed_batch]
-                sub_emb = embed_texts(
-                    sub_texts,
-                    model_name=self.rag.embedding_model,
-                    batch_size=embed_batch,
-                    as_numpy=True,
-                )
+                try:
+                    sub_emb = embed_texts(
+                        sub_texts,
+                        model_name=self.rag.embedding_model,
+                        batch_size=embed_batch,
+                        as_numpy=True,
+                    )
+                except TypeError as exc:
+                    # Log offending sub-batch context so the file/chunk can
+                    # be identified and reported.
+                    logger.error(
+                        "Embedding TypeError on sub-batch starting at %d "
+                        "(batch_size=%d, model=%s): %s",
+                        sub_start, embed_batch, self.rag.embedding_model, exc,
+                    )
+                    for j, st in enumerate(sub_texts):
+                        if not isinstance(st, str) or not st.strip():
+                            logger.error(
+                                "  Offending text at sub-batch index %d: "
+                                "type=%s len=%d source=%s",
+                                j, type(st).__name__,
+                                len(st) if isinstance(st, str) else -1,
+                                all_chunks[sub_start + j].source_file,
+                            )
+                    raise
                 emb_parts.append(sub_emb)
 
             embeddings = _np.vstack(emb_parts) if len(emb_parts) > 1 else emb_parts[0]
@@ -644,6 +687,12 @@ class Indexer:
             document_title=parsed.title,
             format_hint=parsed.format_hint,
         )
+        if not chunks:
+            return
+
+        # Validate: drop chunks with non-string or empty text
+        # (same guard as the batch path in _embed_and_upsert)
+        chunks = [c for c in chunks if isinstance(c.text, str) and c.text.strip()]
         if not chunks:
             return
 

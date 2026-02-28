@@ -914,7 +914,11 @@ class RagDaemon:
         store = self._api.get_store(entry)
         if not store:
             return {}
-        return store.get_detailed_stats()
+        try:
+            return store.get_detailed_stats()
+        except Exception:
+            # Collection may be temporarily deleted during a full reindex
+            return {}
 
     # --- Periodic system snapshot ---
 

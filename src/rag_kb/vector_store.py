@@ -43,6 +43,58 @@ class StoreStats:
     avg_chunks_per_file: float = 0.0
 
 
+class _NoOpEmbeddingFunction:
+    """No-op embedding function to prevent ChromaDB from using its default.
+
+    We always provide pre-computed embeddings in ``upsert()`` calls, so the
+    collection must **not** run its own embedding pipeline.  Without this,
+    ChromaDB assigns a ``DefaultEmbeddingFunction`` whose tokeniser can
+    raise ``TextEncodeInput must be Union[…]`` on malformed document text.
+
+    Implements the minimal interface expected by ChromaDB >= 1.x so that
+    ``get_or_create_collection()`` validation passes.
+    """
+
+    @staticmethod
+    def name() -> str:
+        return "noop"
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        # Should never actually be called — we always pass embeddings.
+        raise NotImplementedError(
+            "NoOpEmbeddingFunction should never be called; "
+            "provide embeddings explicitly in upsert/add."
+        )
+
+    # ChromaDB >= 1.x may call these during collection validation
+    @staticmethod
+    def default_space() -> str:
+        return "cosine"
+
+    @staticmethod
+    def supported_spaces() -> list[str]:
+        return ["cosine", "l2", "ip"]
+
+    @staticmethod
+    def get_config() -> dict:
+        return {}
+
+    @staticmethod
+    def build_from_config(config: dict) -> "_NoOpEmbeddingFunction":
+        return _NoOpEmbeddingFunction()
+
+    @staticmethod
+    def validate_config(config: dict) -> None:
+        pass
+
+    def validate_config_update(self, old_config: dict, new_config: dict) -> None:
+        pass
+
+    @staticmethod
+    def is_legacy() -> bool:
+        return False
+
+
 class VectorStore:
     """Abstraction over a ChromaDB persistent collection."""
 
@@ -128,6 +180,30 @@ class VectorStore:
     # Write operations
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _sanitise_metadatas(
+        metadatas: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Ensure every metadata value is a ChromaDB-compatible type.
+
+        ChromaDB only accepts str, int, float, and bool.  ``None`` values
+        and other types (bytes, list, etc.) cause internal errors.  This
+        method converts or drops invalid entries so the upsert never fails
+        due to metadata.
+        """
+        clean: list[dict[str, str]] = []
+        for meta in metadatas:
+            fixed: dict[str, str] = {}
+            for k, v in meta.items():
+                if v is None:
+                    fixed[k] = ""
+                elif isinstance(v, (str, int, float, bool)):
+                    fixed[k] = v
+                else:
+                    fixed[k] = str(v)
+            clean.append(fixed)
+        return clean
+
     def add_documents(
         self,
         ids: list[str],
@@ -141,6 +217,9 @@ class VectorStore:
         """
         if not ids:
             return
+
+        # Sanitise metadata — ChromaDB rejects None and non-scalar types
+        metadatas = self._sanitise_metadatas(metadatas)
 
         # ChromaDB accepts numpy ndarrays directly (>= 0.4); avoid the
         # expensive .tolist() conversion that allocates millions of
@@ -214,7 +293,7 @@ class VectorStore:
             return {}
         results = self._collection.get(ids=ids, include=["embeddings"])
         out: dict[str, list[float]] = {}
-        if results["ids"] and results["embeddings"] is not None and len(results["embeddings"]) > 0:
+        if len(results.get("ids") or []) > 0 and results.get("embeddings") is not None and len(results["embeddings"]) > 0:
             for doc_id, emb in zip(results["ids"], results["embeddings"]):
                 if emb is not None:
                     out[doc_id] = emb

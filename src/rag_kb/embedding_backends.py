@@ -107,6 +107,27 @@ class SentenceTransformerBackend(EmbeddingBackend):
 
     # -- EmbeddingBackend interface -----------------------------------------
 
+    @staticmethod
+    def _sanitise_text(t: object) -> str:
+        """Coerce *t* to a tokeniser-safe string.
+
+        Handles ``None``, non-str types, null bytes, isolated UTF-16
+        surrogates (common in PDF extraction), and empty strings.
+        """
+        if not isinstance(t, str):
+            t = str(t) if t is not None else " "
+        # Strip null bytes that confuse the tokeniser
+        t = t.replace("\x00", "")
+        # Remove isolated surrogate code-points (\\uD800–\\uDFFF) which
+        # the Rust-based tokeniser cannot encode as valid UTF-8.
+        try:
+            t.encode("utf-8")
+        except UnicodeEncodeError:
+            t = t.encode("utf-8", errors="replace").decode("utf-8")
+        if not t.strip():
+            t = " "  # keep alignment; single space embeds harmlessly
+        return t
+
     def embed_texts(
         self,
         texts: list[str],
@@ -117,18 +138,44 @@ class SentenceTransformerBackend(EmbeddingBackend):
     ) -> np.ndarray:
         if not texts:
             return np.empty((0, self.get_dimension()))
+        # Sanitise inputs — the tokeniser rejects None / non-str values
+        # with a cryptic "TextEncodeInput must be Union[…]" TypeError.
+        sanitised: list[str] = [self._sanitise_text(t) for t in texts]
         prefix = self._query_prefix if is_query else self._document_prefix
         if prefix:
-            texts = [prefix + t for t in texts]
-        return self._model.encode(
-            texts,
-            batch_size=batch_size,
-            show_progress_bar=show_progress,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-        )
+            sanitised = [prefix + t for t in sanitised]
+        try:
+            return self._model.encode(
+                sanitised,
+                batch_size=batch_size,
+                show_progress_bar=show_progress,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            )
+        except TypeError as exc:
+            if "TextEncodeInput" in str(exc):
+                # Last-resort: identify and log the offending entry
+                for idx, s in enumerate(sanitised):
+                    if not isinstance(s, str):
+                        logger.error(
+                            "Non-string detected at index %d: type=%s repr=%r",
+                            idx, type(s).__name__, s,
+                        )
+                # Replace every entry aggressively and retry
+                sanitised = [
+                    s if isinstance(s, str) else " " for s in sanitised
+                ]
+                return self._model.encode(
+                    sanitised,
+                    batch_size=batch_size,
+                    show_progress_bar=show_progress,
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                )
+            raise
 
     def embed_single(self, text: str, *, is_query: bool = False) -> np.ndarray:
+        text = self._sanitise_text(text)
         prefix = self._query_prefix if is_query else self._document_prefix
         if prefix:
             text = prefix + text
