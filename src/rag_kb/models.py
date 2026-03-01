@@ -23,7 +23,6 @@ Providers:
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from enum import Enum
 from pathlib import Path
@@ -38,30 +37,35 @@ logger = logging.getLogger(__name__)
 # Enums
 # ---------------------------------------------------------------------------
 
+
 class ModelType(str, Enum):
     """Model purpose."""
+
     embedding = "embedding"
     reranker = "reranker"
 
 
 class ModelProvider(str, Enum):
     """How the model is served."""
-    local = "local"        # sentence-transformers, runs on-device
-    openai = "openai"      # OpenAI Embeddings API
-    voyage = "voyage"      # Voyage AI Embeddings API
+
+    local = "local"  # sentence-transformers, runs on-device
+    openai = "openai"  # OpenAI Embeddings API
+    voyage = "voyage"  # Voyage AI Embeddings API
 
 
 class ModelStatus(str, Enum):
     """Runtime availability of a model."""
-    bundled = "bundled"       # shipped with the application
-    downloaded = "downloaded" # present in HF cache or bundled dir
-    available = "available"   # known but not yet downloaded
-    api = "api"               # API-based, no local download needed
+
+    bundled = "bundled"  # shipped with the application
+    downloaded = "downloaded"  # present in HF cache or bundled dir
+    available = "available"  # known but not yet downloaded
+    api = "api"  # API-based, no local download needed
 
 
 # ---------------------------------------------------------------------------
 # Model specification
 # ---------------------------------------------------------------------------
+
 
 class ModelSpec(BaseModel):
     """Rich metadata for a supported model."""
@@ -78,32 +82,33 @@ class ModelSpec(BaseModel):
 
     # Documentation
     description: str = Field("", description="When to use this model (2-3 sentences)")
-    use_case_tags: list[str] = Field(default_factory=list,
-                                     description="E.g. multilingual, long-context, lightweight")
+    use_case_tags: list[str] = Field(
+        default_factory=list, description="E.g. multilingual, long-context, lightweight"
+    )
     license: str = Field("Apache-2.0", description="SPDX license identifier")
 
     # Loading behaviour
-    trust_remote_code: bool = Field(False,
-                                    description="Whether the model requires trust_remote_code=True")
+    trust_remote_code: bool = Field(
+        False, description="Whether the model requires trust_remote_code=True"
+    )
     requires_api_key: bool = Field(False, description="True for API-based models")
-    api_key_env_var: str | None = Field(None,
-                                        description="Environment variable for the API key")
+    api_key_env_var: str | None = Field(None, description="Environment variable for the API key")
 
     # Recommended settings
     recommended_chunk_size: int = Field(1024, description="Optimal chunk size (chars)")
     recommended_chunk_overlap: int = Field(128, description="Optimal chunk overlap (chars)")
-    recommended_batch_size: int = Field(256,
-                                        description="Optimal embedding batch size")
+    recommended_batch_size: int = Field(256, description="Optimal embedding batch size")
 
     # Prefix handling (for instruction-tuned models)
-    query_prefix: str | None = Field(None,
-                                     description="Prefix prepended to queries, e.g. 'search_query: '")
-    document_prefix: str | None = Field(None,
-                                        description="Prefix prepended to documents")
+    query_prefix: str | None = Field(
+        None, description="Prefix prepended to queries, e.g. 'search_query: '"
+    )
+    document_prefix: str | None = Field(None, description="Prefix prepended to documents")
 
     # Matryoshka / MRL support
-    matryoshka_dims: list[int] | None = Field(None,
-                                              description="Supported Matryoshka dimension choices")
+    matryoshka_dims: list[int] | None = Field(
+        None, description="Supported Matryoshka dimension choices"
+    )
 
     # Flags
     default: bool = Field(False, description="Bundled/default model")
@@ -163,7 +168,6 @@ EMBEDDING_MODELS: list[ModelSpec] = [
         recommended_chunk_size=800,
         recommended_chunk_overlap=100,
     ),
-
     # -- Balanced quality -------------------------------------------------
     ModelSpec(
         name="all-mpnet-base-v2",
@@ -214,7 +218,6 @@ EMBEDDING_MODELS: list[ModelSpec] = [
         recommended_chunk_overlap=100,
         recommended_batch_size=128,
     ),
-
     # -- Top-tier / long-context ------------------------------------------
     ModelSpec(
         name="BAAI/bge-m3",
@@ -313,7 +316,6 @@ EMBEDDING_MODELS: list[ModelSpec] = [
         recommended_chunk_overlap=512,
         recommended_batch_size=16,
     ),
-
     # -- Older / compatibility --------------------------------------------
     ModelSpec(
         name="paraphrase-MiniLM-L6-v2",
@@ -360,7 +362,6 @@ EMBEDDING_MODELS: list[ModelSpec] = [
         recommended_chunk_size=800,
         recommended_chunk_overlap=100,
     ),
-
     # -- API-based models -------------------------------------------------
     ModelSpec(
         name="openai/text-embedding-3-small",
@@ -567,6 +568,7 @@ _rebuild_index()
 # Public query helpers
 # ---------------------------------------------------------------------------
 
+
 def get_model_spec(name: str) -> ModelSpec | None:
     """Return the ``ModelSpec`` for *name*, or ``None`` if unknown."""
     return _ALL_MODELS.get(name)
@@ -595,6 +597,7 @@ def get_reranker_model_names() -> list[str]:
 # ---------------------------------------------------------------------------
 # Where bundled models live
 # ---------------------------------------------------------------------------
+
 
 def _get_bundled_models_dir() -> Path:
     """Return the ``models/`` directory, whether running from source or a
@@ -649,6 +652,7 @@ def get_model_path(model_name: str) -> str:
 # Model availability checks
 # ---------------------------------------------------------------------------
 
+
 def _is_bundled(model_name: str) -> bool:
     """Return True if the model exists in the bundled models/ directory."""
     if not BUNDLED_MODELS_DIR.exists():
@@ -664,6 +668,7 @@ def _is_in_hf_cache(model_name: str) -> bool:
     """Return True if the model exists in the HuggingFace cache."""
     try:
         from huggingface_hub import scan_cache_dir
+
         cache_info = scan_cache_dir()
         cached_repos = {r.repo_id for r in cache_info.repos}
         candidates = (
@@ -709,6 +714,7 @@ def get_model_disk_size(model_name: str) -> int:
     # Check HF cache
     try:
         from huggingface_hub import scan_cache_dir
+
         cache_info = scan_cache_dir()
         for repo in cache_info.repos:
             if repo.repo_id in (model_name, f"sentence-transformers/{model_name}"):
@@ -730,9 +736,15 @@ def get_all_models_with_status() -> list[dict[str, Any]]:
         status = get_model_status(spec.name)
         d = spec.model_dump()
         d["status"] = status.value
-        d["disk_size_bytes"] = get_model_disk_size(spec.name) if status in (
-            ModelStatus.bundled, ModelStatus.downloaded,
-        ) else 0
+        d["disk_size_bytes"] = (
+            get_model_disk_size(spec.name)
+            if status
+            in (
+                ModelStatus.bundled,
+                ModelStatus.downloaded,
+            )
+            else 0
+        )
         result.append(d)
     return result
 
@@ -768,7 +780,7 @@ def download_models(
     Returns the list of directories created.
     """
     try:
-        from sentence_transformers import SentenceTransformer, CrossEncoder
+        from sentence_transformers import CrossEncoder, SentenceTransformer
     except ImportError as exc:
         raise ImportError(
             "sentence-transformers is required: pip install sentence-transformers"
@@ -834,13 +846,15 @@ def download_model_by_name(
         )
 
     model_type = spec.type.value if spec else "embedding"
-    trust = trust_remote_code if trust_remote_code is not None else (
-        spec.trust_remote_code if spec else False
+    trust = (
+        trust_remote_code
+        if trust_remote_code is not None
+        else (spec.trust_remote_code if spec else False)
     )
     desc = spec.description if spec else "custom model"
 
     try:
-        from sentence_transformers import SentenceTransformer, CrossEncoder
+        from sentence_transformers import CrossEncoder, SentenceTransformer
     except ImportError as exc:
         raise ImportError(
             "sentence-transformers is required: pip install sentence-transformers"
@@ -872,6 +886,7 @@ def _delete_from_hf_cache(model_name: str) -> bool:
     """
     try:
         from huggingface_hub import scan_cache_dir
+
         cache_info = scan_cache_dir()
         candidates = (model_name, f"sentence-transformers/{model_name}")
         commit_hashes: set[str] = set()
@@ -916,6 +931,7 @@ def delete_downloaded_model(model_name: str) -> bool:
         candidate = BUNDLED_MODELS_DIR / candidate_name
         if candidate.is_dir():
             import shutil
+
             shutil.rmtree(candidate)
             logger.info("Deleted model '%s' from %s", model_name, candidate)
             deleted_bundled = True
@@ -937,12 +953,14 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Download models for offline bundling")
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         default=None,
         help="Output directory (default: models/ in repo root)",
     )
     parser.add_argument(
-        "--list", "-l",
+        "--list",
+        "-l",
         action="store_true",
         help="List all available models with status",
     )
@@ -952,7 +970,7 @@ if __name__ == "__main__":
         print(f"\n{'Name':<50} {'Type':<10} {'Dim':<6} {'Ctx':<7} {'Size':<8} {'Status'}")
         print("─" * 100)
         for info in get_all_models_with_status():
-            size = f"{info['model_size_mb']}MB" if info['model_size_mb'] else "API"
+            size = f"{info['model_size_mb']}MB" if info["model_size_mb"] else "API"
             print(
                 f"{info['name']:<50} {info['type']:<10} "
                 f"{info['dimensions']:<6} {info['max_tokens']:<7} "

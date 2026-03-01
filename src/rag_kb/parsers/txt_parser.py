@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 
 class TxtParser:

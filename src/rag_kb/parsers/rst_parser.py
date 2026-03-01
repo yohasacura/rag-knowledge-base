@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 # Pre-compiled regex patterns for RST markup stripping
 _RE_DIRECTIVES = re.compile(r"^\.\.\s[a-zA-Z0-9_-]+::\s*.*$", re.MULTILINE)

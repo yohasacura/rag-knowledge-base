@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # Windows asyncio proactor fix
 # ---------------------------------------------------------------------------
 
+
 def _patch_proactor_connection_lost() -> None:
     """Monkey-patch asyncio proactor transport to handle ``OSError`` on shutdown.
 
@@ -57,7 +58,7 @@ def _patch_proactor_connection_lost() -> None:
     import asyncio.proactor_events as _pe
     import socket as _socket
 
-    def _safe_call_connection_lost(self, exc):          # noqa: N802
+    def _safe_call_connection_lost(self, exc):
         if self._called_connection_lost:
             return
         try:
@@ -73,13 +74,13 @@ def _patch_proactor_connection_lost() -> None:
             server = self._server
             if server is not None:
                 try:
-                    server._detach(self)   # CPython >= 3.13
+                    server._detach(self)  # CPython >= 3.13
                 except TypeError:
-                    server._detach()       # CPython <= 3.12
+                    server._detach()  # CPython <= 3.12
                 self._server = None
             self._called_connection_lost = True
 
-    _pe._ProactorBasePipeTransport._call_connection_lost = (      # type: ignore[assignment]
+    _pe._ProactorBasePipeTransport._call_connection_lost = (  # type: ignore[assignment]
         _safe_call_connection_lost
     )
 
@@ -96,6 +97,7 @@ _auto_refresh_interval = 10  # seconds
 def _make_client():
     """Create and connect a fresh DaemonClient."""
     from rag_kb.daemon_client import DaemonClient
+
     c = DaemonClient()
     c.ensure_daemon()
     c.connect()
@@ -117,15 +119,17 @@ def _find_free_port(host: str, preferred: int, max_attempts: int = 10) -> int:
                 if offset:
                     logger.info(
                         "Port %d in use — using port %d instead.",
-                        preferred, candidate,
+                        preferred,
+                        candidate,
                     )
                 return candidate
         except OSError:
             continue
     logger.warning(
-        "Could not find a free port in range %d–%d; "
-        "will attempt %d anyway.",
-        preferred, preferred + max_attempts - 1, preferred,
+        "Could not find a free port in range %d–%d; will attempt %d anyway.",
+        preferred,
+        preferred + max_attempts - 1,
+        preferred,
     )
     return preferred
 
@@ -145,6 +149,7 @@ def _safe_call(method, *args, **kwargs):
     thread cannot close the socket while another thread is mid-call.
     """
     from rag_kb.rpc_protocol import RpcError
+
     with _client_lock:
         try:
             client = _get_client()
@@ -163,6 +168,7 @@ def _safe_call(method, *args, **kwargs):
                 logger.warning("Stale daemon detected — killing and restarting")
                 try:
                     from rag_kb.daemon_client import _PID_FILE
+
                     if _PID_FILE.exists():
                         pid = int(_PID_FILE.read_text(encoding="utf-8").strip())
                         os.kill(pid, signal.SIGTERM)
@@ -182,7 +188,7 @@ def _safe_call(method, *args, **kwargs):
                 fn = getattr(client, method)
                 return fn(*args, **kwargs)
             except Exception as exc2:
-                logger.error("RPC call %s failed after reconnect: %s", method, exc2)
+                logger.exception("RPC call %s failed after reconnect: %s", method, exc2)  # noqa: TRY401
                 raise
 
 
@@ -390,9 +396,7 @@ def _skeleton_table_rows(cols: int = 5, rows: int = 5):
 def _skeleton_model_cards(count: int = 3):
     """Render skeleton model cards."""
     for _ in range(count):
-        with ui.card().classes(
-            "bg-[#1a1f2b] w-full p-4 border border-[#2a3040]"
-        ):
+        with ui.card().classes("bg-[#1a1f2b] w-full p-4 border border-[#2a3040]"):
             with ui.row().classes("items-center gap-2"):
                 _skeleton_line("180px", "18px")
                 _skeleton_line("80px", "16px")
@@ -406,7 +410,7 @@ def _skeleton_model_cards(count: int = 3):
 
 def _skeleton_config_form():
     """Render skeleton mimicking a settings form."""
-    for section in range(3):
+    for _section in range(3):
         _skeleton_line("140px", "16px", "mt-4 mb-1")
         _skeleton_block("100%", "40px", "max-w-[400px]")
         with ui.row().classes("gap-4 mt-2"):
@@ -418,22 +422,22 @@ def _skeleton_metric_cards(count: int = 5):
     """Render skeleton metric cards for Monitoring."""
     with ui.row().classes("w-full gap-4 flex-wrap"):
         for _ in range(count):
-            with ui.card().classes(
-                "bg-[#22262e] border border-[#313949] rounded-lg p-3 min-w-[140px] flex-1"
+            with (
+                ui.card().classes(
+                    "bg-[#22262e] border border-[#313949] rounded-lg p-3 min-w-[140px] flex-1"
+                ),
+                ui.row().classes("items-center gap-2"),
             ):
-                with ui.row().classes("items-center gap-2"):
-                    _skeleton_line("24px", "24px")
-                    with ui.column().classes("gap-1"):
-                        _skeleton_line("70px", "18px")
-                        _skeleton_line("50px", "10px")
+                _skeleton_line("24px", "24px")
+                with ui.column().classes("gap-1"):
+                    _skeleton_line("70px", "18px")
+                    _skeleton_line("50px", "10px")
 
 
 def _skeleton_search_results(count: int = 3):
     """Render skeleton search result cards."""
     for _ in range(count):
-        with ui.card().classes(
-            "w-full bg-[#1d232e] border border-[#313949] rounded-lg p-4"
-        ):
+        with ui.card().classes("w-full bg-[#1d232e] border border-[#313949] rounded-lg p-4"):
             with ui.row().classes("w-full justify-between items-center"):
                 with ui.row().classes("items-center gap-2"):
                     _skeleton_line("30px", "18px")
@@ -480,9 +484,7 @@ class DashboardPage:
     def build(self):
         with ui.column().classes("w-full gap-4"):
             ui.label("Dashboard").classes("text-2xl font-bold text-white")
-            ui.label("Overview of your RAG knowledge bases").classes(
-                "text-sm text-gray-400 -mt-2"
-            )
+            ui.label("Overview of your RAG knowledge bases").classes("text-sm text-gray-400 -mt-2")
 
             # Stat cards row
             with ui.row().classes("w-full gap-4 flex-wrap"):
@@ -536,9 +538,7 @@ class DashboardPage:
                 if active:
                     rtype = "Imported" if active.get("is_imported") else "Local"
                     status = "Detached" if active.get("detached") else rtype
-                    ui.label(f"Active: {active['name']}").classes(
-                        "text-lg font-bold text-white"
-                    )
+                    ui.label(f"Active: {active['name']}").classes("text-lg font-bold text-white")
                     with ui.row().classes("gap-8 flex-wrap"):
                         self._detail("Type", status)
                         self._detail("Embedding Model", active.get("embedding_model", ""))
@@ -553,9 +553,9 @@ class DashboardPage:
                             ui.label(f"  📁 {f}").classes("text-sm text-gray-300 font-mono")
                 else:
                     ui.label("No active RAG selected").classes("text-gray-400")
-                    ui.label(
-                        "Create a knowledge base or select one from the Manage page."
-                    ).classes("text-sm text-gray-500")
+                    ui.label("Create a knowledge base or select one from the Manage page.").classes(
+                        "text-sm text-gray-500"
+                    )
 
         except RuntimeError:
             pass  # UI elements deleted (page navigated away)
@@ -564,22 +564,14 @@ class DashboardPage:
 
         # Metrics at-a-glance — update labels in-place (no clear/rebuild)
         try:
-            dashboard = await run.io_bound(
-                lambda: _safe_call("get_metrics_dashboard")
-            ) or {}
+            dashboard = await run.io_bound(lambda: _safe_call("get_metrics_dashboard")) or {}
             idx = dashboard.get("indexing_aggregates") or {}
             srch = dashboard.get("search_aggregates") or {}
             emb = dashboard.get("embedding_aggregates") or {}
             self._metric_idx_runs.set_text(str(idx.get("total_runs", 0)))
-            self._metric_search_queries.set_text(
-                str(srch.get("total_queries", 0))
-            )
-            self._metric_avg_latency.set_text(
-                f"{srch.get('avg_latency_ms', 0) or 0:.0f} ms"
-            )
-            self._metric_embed_batches.set_text(
-                str(emb.get("total_batches", 0))
-            )
+            self._metric_search_queries.set_text(str(srch.get("total_queries", 0)))
+            self._metric_avg_latency.set_text(f"{srch.get('avg_latency_ms', 0) or 0:.0f} ms")
+            self._metric_embed_batches.set_text(str(emb.get("total_batches", 0)))
         except Exception:
             pass  # metrics not available yet
 
@@ -620,17 +612,16 @@ class SearchPage:
                 self._query_input = (
                     ui.input("Search query…")
                     .classes("flex-grow")
-                    .props('outlined dark dense')
+                    .props("outlined dark dense")
                     .on("keydown.enter", self._do_search)
                 )
                 self._top_k_input = (
                     ui.number("Top N", value=5, min=1, max=50, step=1)
                     .classes("w-24")
-                    .props('outlined dark dense')
+                    .props("outlined dark dense")
                 )
-                self._search_btn = (
-                    ui.button("Search", on_click=self._do_search)
-                    .props('color=primary')
+                self._search_btn = ui.button("Search", on_click=self._do_search).props(
+                    "color=primary"
                 )
 
             self._status_label = ui.label("").classes("text-sm text-gray-400")
@@ -642,7 +633,7 @@ class SearchPage:
             ui.notify("Enter a search query", type="warning")
             return
 
-        self._search_btn.props('loading')
+        self._search_btn.props("loading")
         self._status_label.set_text("Searching…")
         self._results_container.clear()
         with self._results_container:
@@ -650,9 +641,7 @@ class SearchPage:
 
         try:
             top_k = int(self._top_k_input.value or 5)
-            results = await run.io_bound(
-                lambda: _safe_call("search", query=query, top_k=top_k)
-            )
+            results = await run.io_bound(lambda: _safe_call("search", query=query, top_k=top_k))
 
             self._results_container.clear()
             if not results:
@@ -668,7 +657,7 @@ class SearchPage:
             self._status_label.set_text(f"Error: {exc}")
             ui.notify(f"Search failed: {exc}", type="negative")
         finally:
-            self._search_btn.props(remove='loading')
+            self._search_btn.props(remove="loading")
 
     @staticmethod
     def _render_result(rank: int, r: dict):
@@ -684,17 +673,13 @@ class SearchPage:
             with ui.row().classes("w-full justify-between items-center"):
                 with ui.row().classes("items-center gap-2"):
                     ui.label(f"#{rank}").classes("text-lg font-bold text-blue-400")
-                    ui.label(r.get("source_file", "")).classes(
-                        "text-sm font-mono text-gray-300"
-                    )
-                    ui.label(f"chunk {r.get('chunk_index', 0)}").classes(
-                        "text-xs text-gray-500"
-                    )
+                    ui.label(r.get("source_file", "")).classes("text-sm font-mono text-gray-300")
+                    ui.label(f"chunk {r.get('chunk_index', 0)}").classes("text-xs text-gray-500")
                 ui.label(f"{score_pct}%").classes(f"text-lg font-bold {score_class}")
 
             # Score bar
             ui.linear_progress(value=score).classes("mt-1").props(
-                f'color={"green" if score >= 0.6 else "orange" if score >= 0.35 else "red"}'
+                f"color={'green' if score >= 0.6 else 'orange' if score >= 0.35 else 'red'}"
             )
 
             # Content
@@ -733,29 +718,61 @@ class ManagePage:
 
             # Action buttons
             with ui.row().classes("gap-2"):
-                ui.button(
-                    "＋ New Knowledge Base", on_click=self._show_create_dialog
-                ).props('color=primary')
+                ui.button("＋ New Knowledge Base", on_click=self._show_create_dialog).props(
+                    "color=primary"
+                )
                 ui.button("📥 Import .rag…", on_click=self._show_import_dialog).props(
-                    'outline color=white'
+                    "outline color=white"
                 )
 
             # RAG table
-            self._table = ui.table(
-                columns=[
-                    {"name": "name", "label": "Name", "field": "name", "sortable": True, "align": "left"},
-                    {"name": "status", "label": "Status", "field": "status", "align": "left"},
-                    {"name": "description", "label": "Description", "field": "description", "align": "left"},
-                    {"name": "files", "label": "Files", "field": "files", "sortable": True, "align": "right"},
-                    {"name": "chunks", "label": "Chunks", "field": "chunks", "sortable": True, "align": "right"},
-                    {"name": "model", "label": "Model", "field": "model", "align": "left"},
-                    {"name": "created", "label": "Created", "field": "created", "align": "left"},
-                ],
-                rows=[],
-                row_key="name",
-                selection="single",
-                on_select=self._on_select,
-            ).classes("w-full").props('dark flat bordered dense')
+            self._table = (
+                ui.table(
+                    columns=[
+                        {
+                            "name": "name",
+                            "label": "Name",
+                            "field": "name",
+                            "sortable": True,
+                            "align": "left",
+                        },
+                        {"name": "status", "label": "Status", "field": "status", "align": "left"},
+                        {
+                            "name": "description",
+                            "label": "Description",
+                            "field": "description",
+                            "align": "left",
+                        },
+                        {
+                            "name": "files",
+                            "label": "Files",
+                            "field": "files",
+                            "sortable": True,
+                            "align": "right",
+                        },
+                        {
+                            "name": "chunks",
+                            "label": "Chunks",
+                            "field": "chunks",
+                            "sortable": True,
+                            "align": "right",
+                        },
+                        {"name": "model", "label": "Model", "field": "model", "align": "left"},
+                        {
+                            "name": "created",
+                            "label": "Created",
+                            "field": "created",
+                            "align": "left",
+                        },
+                    ],
+                    rows=[],
+                    row_key="name",
+                    selection="single",
+                    on_select=self._on_select,
+                )
+                .classes("w-full")
+                .props("dark flat bordered dense")
+            )
 
             # Detail panel
             self._detail_container = ui.column().classes(
@@ -787,15 +804,17 @@ class ManagePage:
                 else:
                     status_parts.append("📁 Local")
 
-                rows.append({
-                    "name": r["name"],
-                    "status": " · ".join(status_parts),
-                    "description": r.get("description", ""),
-                    "files": r.get("file_count", 0),
-                    "chunks": r.get("chunk_count", 0),
-                    "model": r.get("embedding_model", ""),
-                    "created": (r.get("created_at", "") or "")[:10],
-                })
+                rows.append(
+                    {
+                        "name": r["name"],
+                        "status": " · ".join(status_parts),
+                        "description": r.get("description", ""),
+                        "files": r.get("file_count", 0),
+                        "chunks": r.get("chunk_count", 0),
+                        "model": r.get("embedding_model", ""),
+                        "created": (r.get("created_at", "") or "")[:10],
+                    }
+                )
             self._table.rows = rows
             self._table.update()
             # Hide table skeleton once data is loaded
@@ -854,9 +873,9 @@ class ManagePage:
                     )
                 with ui.column().classes("gap-1"):
                     ui.label("Files / Chunks").classes("text-xs text-gray-400")
-                    ui.label(
-                        f"{rag.get('file_count', 0)} / {rag.get('chunk_count', 0)}"
-                    ).classes("text-sm font-bold text-gray-200")
+                    ui.label(f"{rag.get('file_count', 0)} / {rag.get('chunk_count', 0)}").classes(
+                        "text-sm font-bold text-gray-200"
+                    )
                 with ui.column().classes("gap-1"):
                     ui.label("Created").classes("text-xs text-gray-400")
                     ui.label((rag.get("created_at", "") or "")[:19]).classes(
@@ -879,9 +898,7 @@ class ManagePage:
                         )
                     for f in current_folders:
                         with ui.row().classes("items-center gap-1 w-full"):
-                            ui.label(f"📁 {f}").classes(
-                                "text-sm text-gray-300 font-mono flex-grow"
-                            )
+                            ui.label(f"📁 {f}").classes("text-sm text-gray-300 font-mono flex-grow")
                             if not is_detached:
                                 ui.button(
                                     icon="close",
@@ -899,7 +916,7 @@ class ManagePage:
                                 "update_rag", name, source_folders=list(current_folders)
                             )
                         )
-                        ui.notify(f"Removed folder", type="positive")
+                        ui.notify("Removed folder", type="positive")
                         _refresh_folder_list()
                         await self.refresh()
                     except Exception as exc:
@@ -920,11 +937,9 @@ class ManagePage:
                 folder_input.value = ""
                 try:
                     await run.io_bound(
-                        lambda: _safe_call(
-                            "update_rag", name, source_folders=list(current_folders)
-                        )
+                        lambda: _safe_call("update_rag", name, source_folders=list(current_folders))
                     )
-                    ui.notify(f"Added folder", type="positive")
+                    ui.notify("Added folder", type="positive")
                     await self.refresh()
                 except Exception as exc:
                     current_folders.remove(path)
@@ -935,13 +950,15 @@ class ManagePage:
 
             if not is_detached:
                 with ui.row().classes("w-full items-center gap-2"):
-                    folder_input = ui.input("Add folder path…").props(
-                        "outlined dark dense"
-                    ).classes("flex-grow")
+                    folder_input = (
+                        ui.input("Add folder path…")
+                        .props("outlined dark dense")
+                        .classes("flex-grow")
+                    )
 
                     def _open_browser():
                         self._show_folder_browser(
-                            on_select=lambda path: _add_folder(path),
+                            on_select=_add_folder,
                             start_path=folder_input.value.strip() or None,
                         )
 
@@ -959,28 +976,28 @@ class ManagePage:
                     ui.button(
                         "Set as Active",
                         on_click=lambda n=name: self._set_active(n),
-                    ).props('color=primary outline')
+                    ).props("color=primary outline")
 
                 ui.button(
                     "Export .rag",
                     on_click=lambda n=name: self._show_export_dialog(n),
-                ).props('outline color=white')
+                ).props("outline color=white")
 
                 if rag.get("detached"):
                     ui.button(
                         "Re-attach",
                         on_click=lambda n=name: self._attach(n),
-                    ).props('outline color=orange')
+                    ).props("outline color=orange")
                 elif not rag.get("is_imported"):
                     ui.button(
                         "Detach",
                         on_click=lambda n=name: self._detach(n),
-                    ).props('outline color=orange')
+                    ).props("outline color=orange")
 
                 ui.button(
                     "Delete",
                     on_click=lambda n=name: self._confirm_delete(n),
-                ).props('color=negative outline')
+                ).props("color=negative outline")
 
     async def _set_active(self, name: str):
         try:
@@ -1012,15 +1029,15 @@ class ManagePage:
     def _confirm_delete(self, name: str):
         with ui.dialog() as dlg, ui.card().classes("bg-[#1d232e] min-w-[400px] max-w-[90vw]"):
             ui.label(f"Delete '{name}'?").classes("text-lg font-bold text-white")
-            ui.label(
-                "This will permanently delete the RAG database and all indexed data."
-            ).classes("text-sm text-gray-400")
+            ui.label("This will permanently delete the RAG database and all indexed data.").classes(
+                "text-sm text-gray-400"
+            )
             with ui.row().classes("w-full justify-end gap-2 mt-4"):
-                ui.button("Cancel", on_click=dlg.close).props('flat color=white')
+                ui.button("Cancel", on_click=dlg.close).props("flat color=white")
                 ui.button(
                     "Delete",
                     on_click=lambda: self._do_delete(name, dlg),
-                ).props('color=negative')
+                ).props("color=negative")
         dlg.open()
 
     async def _do_delete(self, name: str, dlg):
@@ -1044,30 +1061,39 @@ class ManagePage:
         with ui.dialog() as dlg, ui.card().classes("bg-[#1d232e] min-w-[500px] max-w-[90vw]"):
             ui.label("Create New Knowledge Base").classes("text-xl font-bold text-white")
 
-            name_input = ui.input("Name").props('outlined dark dense').classes("w-full")
-            desc_input = ui.input("Description (optional)").props('outlined dark dense').classes("w-full")
+            name_input = ui.input("Name").props("outlined dark dense").classes("w-full")
+            desc_input = (
+                ui.input("Description (optional)").props("outlined dark dense").classes("w-full")
+            )
 
             from rag_kb.models import get_embedding_model_names
-            model_input = ui.select(
-                options=get_embedding_model_names(),
-                value="paraphrase-multilingual-MiniLM-L12-v2",
-                label="Embedding Model",
-            ).props('outlined dark dense').classes("w-full")
+
+            model_input = (
+                ui.select(
+                    options=get_embedding_model_names(),
+                    value="paraphrase-multilingual-MiniLM-L12-v2",
+                    label="Embedding Model",
+                )
+                .props("outlined dark dense")
+                .classes("w-full")
+            )
 
             ui.label("Source Folders").classes("text-sm text-gray-400 mt-2")
             folders_container = ui.column().classes("w-full gap-1")
 
             with ui.row().classes("w-full items-center gap-2"):
-                folder_input = ui.input("Add folder path…").props('outlined dark dense').classes("flex-grow")
+                folder_input = (
+                    ui.input("Add folder path…").props("outlined dark dense").classes("flex-grow")
+                )
 
                 def _open_browser():
                     self._show_folder_browser(
-                        on_select=lambda path: _add_folder_path(path),
+                        on_select=_add_folder_path,
                         start_path=folder_input.value.strip() or None,
                     )
 
                 ui.button(icon="folder_open", on_click=_open_browser).props(
-                    'flat dense color=primary'
+                    "flat dense color=primary"
                 ).tooltip("Browse folders")
 
             def _add_folder_path(path: str):
@@ -1093,12 +1119,12 @@ class ManagePage:
                             ui.button(
                                 icon="close",
                                 on_click=lambda _f=f: remove_folder(_f),
-                            ).props('flat dense round size=sm color=red')
+                            ).props("flat dense round size=sm color=red")
 
-            ui.button("Add Folder", on_click=add_folder).props('flat dense color=primary')
+            ui.button("Add Folder", on_click=add_folder).props("flat dense color=primary")
 
             with ui.row().classes("w-full justify-end gap-2 mt-4"):
-                ui.button("Cancel", on_click=dlg.close).props('flat color=white')
+                ui.button("Cancel", on_click=dlg.close).props("flat color=white")
                 ui.button(
                     "Create",
                     on_click=lambda: self._do_create(
@@ -1108,7 +1134,7 @@ class ManagePage:
                         model_input.value,
                         dlg,
                     ),
-                ).props('color=primary')
+                ).props("color=primary")
         dlg.open()
 
     def _show_folder_browser(self, on_select, start_path: str | None = None):
@@ -1130,7 +1156,9 @@ class ManagePage:
             """Return sorted directory entries for *dirpath*."""
             entries = []
             try:
-                for entry in sorted(Path(dirpath).iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+                for entry in sorted(
+                    Path(dirpath).iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())
+                ):
                     # Skip hidden/system dirs
                     if entry.name.startswith("."):
                         continue
@@ -1138,11 +1166,13 @@ class ManagePage:
                         is_dir = entry.is_dir()
                     except PermissionError:
                         continue
-                    entries.append({
-                        "name": entry.name,
-                        "path": str(entry),
-                        "is_dir": is_dir,
-                    })
+                    entries.append(
+                        {
+                            "name": entry.name,
+                            "path": str(entry),
+                            "is_dir": is_dir,
+                        }
+                    )
             except PermissionError:
                 pass
             return entries
@@ -1152,6 +1182,7 @@ class ManagePage:
             drives = []
             if sys.platform == "win32":
                 import string
+
                 for letter in string.ascii_uppercase:
                     dp = f"{letter}:\\"
                     if Path(dp).exists():
@@ -1189,21 +1220,22 @@ class ManagePage:
                     ):
                         ui.icon(icon).classes(f"{color} text-lg")
                         if entry["is_dir"]:
-                            ui.label(entry["name"]).classes(
-                                "text-sm text-gray-200 flex-grow"
-                            ).on("click", lambda _e=entry: _navigate(_e["path"]))
-                        else:
-                            ui.label(entry["name"]).classes(
-                                "text-sm text-gray-500 flex-grow"
+                            ui.label(entry["name"]).classes("text-sm text-gray-200 flex-grow").on(
+                                "click", lambda _e=entry: _navigate(_e["path"])
                             )
+                        else:
+                            ui.label(entry["name"]).classes("text-sm text-gray-500 flex-grow")
 
-        with ui.dialog() as browser_dlg, ui.card().classes("bg-[#1d232e] min-w-[550px] max-w-[90vw]"):
+        with (
+            ui.dialog() as browser_dlg,
+            ui.card().classes("bg-[#1d232e] min-w-[550px] max-w-[90vw]"),
+        ):
             ui.label("Select Folder").classes("text-xl font-bold text-white")
 
             # Navigation bar
             with ui.row().classes("w-full items-center gap-1"):
                 ui.button(icon="arrow_upward", on_click=_go_up).props(
-                    'flat dense round color=white'
+                    "flat dense round color=white"
                 ).tooltip("Go up")
 
                 # Drive buttons on Windows
@@ -1213,12 +1245,12 @@ class ManagePage:
                         ui.button(
                             drv.rstrip("\\"),
                             on_click=lambda _d=drv: _navigate(_d),
-                        ).props('flat dense size=sm color=grey-5')
+                        ).props("flat dense size=sm color=grey-5")
 
                 ui.button(
                     icon="home",
                     on_click=lambda: _navigate(str(Path.home())),
-                ).props('flat dense round color=white').tooltip("Home")
+                ).props("flat dense round color=white").tooltip("Home")
 
             # Current path display
             path_label = ui.label(current_path).classes(
@@ -1226,24 +1258,26 @@ class ManagePage:
             )
 
             # Directory listing
-            listing_container = ui.scroll_area().classes(
-                "w-full border border-gray-700 rounded"
-            ).style("height: 350px")
+            listing_container = (
+                ui.scroll_area()
+                .classes("w-full border border-gray-700 rounded")
+                .style("height: 350px")
+            )
             _refresh_listing()
 
             # Manual path input
             with ui.row().classes("w-full items-center gap-2 mt-2"):
-                manual_input = ui.input("Or type path…").props(
-                    'outlined dark dense'
-                ).classes("flex-grow")
+                manual_input = (
+                    ui.input("Or type path…").props("outlined dark dense").classes("flex-grow")
+                )
                 ui.button(
                     "Go",
                     on_click=lambda: _navigate(manual_input.value),
-                ).props('flat dense color=primary')
+                ).props("flat dense color=primary")
 
             # Action buttons
             with ui.row().classes("w-full justify-end gap-2 mt-2"):
-                ui.button("Cancel", on_click=browser_dlg.close).props('flat color=white')
+                ui.button("Cancel", on_click=browser_dlg.close).props("flat color=white")
 
                 async def _select_current():
                     result = on_select(current_path)
@@ -1254,7 +1288,7 @@ class ManagePage:
                 ui.button(
                     "Select This Folder",
                     on_click=_select_current,
-                ).props('color=primary')
+                ).props("color=primary")
 
         browser_dlg.open()
 
@@ -1284,17 +1318,17 @@ class ManagePage:
 
         with ui.dialog() as dlg, ui.card().classes("bg-[#1d232e] min-w-[500px] max-w-[90vw]"):
             ui.label("Import .rag File").classes("text-xl font-bold text-white")
-            path_input = ui.input("File path (.rag)").props('outlined dark dense').classes("w-full")
-            name_input = ui.input("Custom name (optional)").props('outlined dark dense').classes("w-full")
+            path_input = ui.input("File path (.rag)").props("outlined dark dense").classes("w-full")
+            name_input = (
+                ui.input("Custom name (optional)").props("outlined dark dense").classes("w-full")
+            )
 
             with ui.row().classes("w-full justify-end gap-2 mt-4"):
-                ui.button("Cancel", on_click=dlg.close).props('flat color=white')
+                ui.button("Cancel", on_click=dlg.close).props("flat color=white")
                 ui.button(
                     "Import",
-                    on_click=lambda: self._do_import(
-                        path_input.value, name_input.value, dlg
-                    ),
-                ).props('color=primary')
+                    on_click=lambda: self._do_import(path_input.value, name_input.value, dlg),
+                ).props("color=primary")
         dlg.open()
 
     async def _do_import(self, path, name, dlg):
@@ -1322,15 +1356,17 @@ class ManagePage:
 
         with ui.dialog() as dlg, ui.card().classes("bg-[#1d232e] min-w-[500px] max-w-[90vw]"):
             ui.label(f"Export '{name}'").classes("text-xl font-bold text-white")
-            path_input = ui.input("Output path (.rag)").props('outlined dark dense').classes("w-full")
+            path_input = (
+                ui.input("Output path (.rag)").props("outlined dark dense").classes("w-full")
+            )
             path_input.value = f"{name}.rag"
 
             with ui.row().classes("w-full justify-end gap-2 mt-4"):
-                ui.button("Cancel", on_click=dlg.close).props('flat color=white')
+                ui.button("Cancel", on_click=dlg.close).props("flat color=white")
                 ui.button(
                     "Export",
                     on_click=lambda: self._do_export(name, path_input.value, dlg),
-                ).props('color=primary')
+                ).props("color=primary")
         dlg.open()
 
     async def _do_export(self, name, path, dlg):
@@ -1362,7 +1398,7 @@ class IndexingPage:
     """Document indexing and file change detection page."""
 
     _FILES_PAGE_SIZE = 50
-    _PROGRESS_POLL_INTERVAL = 1.0  # seconds between progress polls
+    _PROGRESS_POLL_INTERVAL = 2.0  # seconds between progress polls
 
     def __init__(self):
         self._info_container = None
@@ -1382,9 +1418,9 @@ class IndexingPage:
         self._check_btn = None
         self._is_indexing = False
         self._seen_live_progress = False  # True once daemon reports live indexing
-        self._files_page = 0       # current 0-based page index
-        self._files_total = 0      # total matching files
-        self._files_filter = ""    # current filter string
+        self._files_page = 0  # current 0-based page index
+        self._files_total = 0  # total matching files
+        self._files_filter = ""  # current filter string
         self._progress_timer = None
         self._deferred_timer = None
 
@@ -1409,15 +1445,15 @@ class IndexingPage:
 
             # Action buttons
             with ui.row().classes("gap-2"):
-                self._index_btn = ui.button(
-                    "📄 Incremental Index", on_click=self._do_index
-                ).props('color=primary')
-                self._reindex_btn = ui.button(
-                    "🔄 Full Reindex", on_click=self._do_reindex
-                ).props('color=primary outline')
+                self._index_btn = ui.button("📄 Incremental Index", on_click=self._do_index).props(
+                    "color=primary"
+                )
+                self._reindex_btn = ui.button("🔄 Full Reindex", on_click=self._do_reindex).props(
+                    "color=primary outline"
+                )
                 self._check_btn = ui.button(
                     "🔍 Check for Changes", on_click=self._check_changes
-                ).props('outline color=white')
+                ).props("outline color=white")
 
             # Progress section
             self._progress_container = ui.column().classes(
@@ -1429,7 +1465,9 @@ class IndexingPage:
                 self._progress_phase = ui.label("").classes("text-sm font-bold")
                 with ui.row().classes("w-full items-center gap-2"):
                     self._progress_bar = ui.linear_progress(value=0).classes("flex-grow")
-                    self._progress_label = ui.label("0%").classes("text-sm text-gray-300 w-16 text-right")
+                    self._progress_label = ui.label("0%").classes(
+                        "text-sm text-gray-300 w-16 text-right"
+                    )
                 self._progress_file = ui.label("").classes("text-sm text-gray-400")
 
             # File changes section
@@ -1440,30 +1478,58 @@ class IndexingPage:
                 with ui.row().classes("w-full items-center gap-2"):
                     ui.label("Indexed Files").classes("text-lg font-semibold text-white")
                     ui.space()
-                    self._files_filter_input = ui.input(
-                        placeholder="Filter files…",
-                        on_change=lambda e: self._on_filter_change(e.value),
-                    ).props('outlined dark dense clearable').classes("w-64")
+                    self._files_filter_input = (
+                        ui.input(
+                            placeholder="Filter files…",
+                            on_change=lambda e: self._on_filter_change(e.value),
+                        )
+                        .props("outlined dark dense clearable")
+                        .classes("w-64")
+                    )
 
-                self._files_table = ui.table(
-                    columns=[
-                        {"name": "num", "label": "#", "field": "num", "align": "right", "sortable": False},
-                        {"name": "file", "label": "File", "field": "file", "align": "left", "sortable": True},
-                        {"name": "chunks", "label": "Chunks", "field": "chunks", "align": "right", "sortable": True},
-                    ],
-                    rows=[],
-                    row_key="file",
-                ).classes("w-full").props('dark flat bordered dense')
+                self._files_table = (
+                    ui.table(
+                        columns=[
+                            {
+                                "name": "num",
+                                "label": "#",
+                                "field": "num",
+                                "align": "right",
+                                "sortable": False,
+                            },
+                            {
+                                "name": "file",
+                                "label": "File",
+                                "field": "file",
+                                "align": "left",
+                                "sortable": True,
+                            },
+                            {
+                                "name": "chunks",
+                                "label": "Chunks",
+                                "field": "chunks",
+                                "align": "right",
+                                "sortable": True,
+                            },
+                        ],
+                        rows=[],
+                        row_key="file",
+                    )
+                    .classes("w-full")
+                    .props("dark flat bordered dense")
+                )
 
                 with ui.row().classes("w-full items-center justify-between"):
                     self._files_pagination_label = ui.label("").classes("text-sm text-gray-400")
                     with ui.row().classes("gap-1"):
                         self._files_prev_btn = ui.button(
-                            "← Prev", on_click=self._files_prev_page,
-                        ).props('flat dense no-caps size=sm color=primary')
+                            "← Prev",
+                            on_click=self._files_prev_page,
+                        ).props("flat dense no-caps size=sm color=primary")
                         self._files_next_btn = ui.button(
-                            "Next →", on_click=self._files_next_page,
-                        ).props('flat dense no-caps size=sm color=primary')
+                            "Next →",
+                            on_click=self._files_next_page,
+                        ).props("flat dense no-caps size=sm color=primary")
 
             # Show skeleton placeholder, defer data fetch
             with self._info_container:
@@ -1485,12 +1551,18 @@ class IndexingPage:
                 if active:
                     ui.label(f"Active RAG: {active}").classes("text-lg font-bold text-white")
                     with ui.row().classes("gap-6"):
-                        ui.label(f"Files: {status.get('total_files', 0)}").classes("text-sm text-gray-300")
-                        ui.label(f"Chunks: {status.get('total_chunks', 0)}").classes("text-sm text-gray-300")
+                        ui.label(f"Files: {status.get('total_files', 0)}").classes(
+                            "text-sm text-gray-300"
+                        )
+                        ui.label(f"Chunks: {status.get('total_chunks', 0)}").classes(
+                            "text-sm text-gray-300"
+                        )
                         watcher = "Running" if status.get("watcher_running") else "Stopped"
                         ui.label(f"Watcher: {watcher}").classes("text-sm text-gray-300")
                     if status.get("last_indexed"):
-                        ui.label(f"Last indexed: {status['last_indexed']}").classes("text-xs text-gray-500")
+                        ui.label(f"Last indexed: {status['last_indexed']}").classes(
+                            "text-xs text-gray-500"
+                        )
                     errors = status.get("errors", [])
                     if errors:
                         for e in errors[:5]:
@@ -1525,12 +1597,14 @@ class IndexingPage:
         """Fetch the current page of files from the daemon and update the table."""
         try:
             ps = self._FILES_PAGE_SIZE
-            result = await run.io_bound(lambda: _safe_call(
-                "list_indexed_files",
-                offset=self._files_page * ps,
-                limit=ps,
-                filter=self._files_filter,
-            ))
+            result = await run.io_bound(
+                lambda: _safe_call(
+                    "list_indexed_files",
+                    offset=self._files_page * ps,
+                    limit=ps,
+                    filter=self._files_filter,
+                )
+            )
             if result is None:
                 return  # collection may be missing during reindex
             files = result.get("files", [])
@@ -1604,9 +1678,9 @@ class IndexingPage:
         if self._progress_timer is not None:
             return  # already polling
 
-        def _poll_progress():
+        async def _poll_progress():
             try:
-                status = _safe_call("get_index_status")
+                status = await run.io_bound(lambda: _safe_call("get_index_status"))
                 if status is None:
                     return  # transient RPC failure — retry next tick
                 live = status.get("indexing")
@@ -1616,11 +1690,22 @@ class IndexingPage:
                     # Indexing has finished (we saw it running, now it's gone)
                     self._stop_progress_polling()
                     self._is_indexing = False
-                    self._progress_phase.set_text("✅ Done")
+
+                    # Check if daemon reports errors in last_status
+                    errors = status.get("errors", [])
+                    if errors:
+                        self._progress_phase.set_text("⚠️ Done with errors")
+                        self._progress_file.set_text(
+                            f"{len(errors)} error(s): {errors[0]}"
+                            + (" …" if len(errors) > 1 else "")
+                        )
+                    else:
+                        self._progress_phase.set_text("✅ Done")
+                        self._progress_file.set_text("Indexing complete")
+
                     self._progress_bar.value = 1.0
                     self._progress_label.set_text("100%")
-                    self._progress_file.set_text("Indexing complete")
-                    self._index_btn.props(remove='loading')
+                    self._index_btn.props(remove="loading")
                     self._index_btn.set_enabled(True)
                     self._reindex_btn.set_enabled(True)
                     self._deferred_timer = ui.timer(0.1, self.refresh, once=True)
@@ -1634,9 +1719,7 @@ class IndexingPage:
                 # just skip this poll cycle — the timer will retry.
                 logger.debug("Progress poll error (will retry): %s", exc)
 
-        self._progress_timer = ui.timer(
-            self._PROGRESS_POLL_INTERVAL, _poll_progress
-        )
+        self._progress_timer = ui.timer(self._PROGRESS_POLL_INTERVAL, _poll_progress)
 
     def _stop_progress_polling(self):
         """Cancel the progress polling timer."""
@@ -1648,7 +1731,7 @@ class IndexingPage:
         self._is_indexing = True
         self._index_btn.set_enabled(False)
         self._reindex_btn.set_enabled(False)
-        self._index_btn.props('loading')
+        self._index_btn.props("loading")
         self._progress_container.set_visibility(True)
         self._progress_bar.value = 0
         self._progress_label.set_text("0%")
@@ -1676,29 +1759,55 @@ class IndexingPage:
             duration = result.get("duration_seconds", 0)
             errors = result.get("errors", [])
 
-            self._progress_phase.set_text("✅ Done")
+            if errors:
+                self._progress_phase.set_text(
+                    f"⚠️ Done with {len(errors)} error(s)"
+                )
+            else:
+                self._progress_phase.set_text("✅ Done")
             self._progress_bar.value = 1.0
             self._progress_label.set_text("100%")
             self._progress_file.set_text(
-                f"{files} files, {chunks} chunks in {duration}s"
+                f"{files} files, {chunks} chunks in {duration:.1f}s"
                 + (f" ({len(errors)} errors)" if errors else "")
             )
 
             # Show phase timing breakdown if available
-            phase_keys = ["scan_seconds", "parse_seconds", "chunk_seconds",
-                          "embed_seconds", "upsert_seconds", "manifest_seconds"]
+            phase_keys = [
+                "scan_seconds",
+                "parse_seconds",
+                "chunk_seconds",
+                "embed_seconds",
+                "upsert_seconds",
+                "manifest_seconds",
+            ]
             phase_parts = [
-                f"{k.replace('_seconds','')}: {result.get(k, 0):.2f}s"
-                for k in phase_keys if result.get(k, 0) > 0
+                f"{k.replace('_seconds', '')}: {result.get(k, 0):.2f}s"
+                for k in phase_keys
+                if result.get(k, 0) > 0
             ]
             if phase_parts:
                 self._progress_file.set_text(
                     self._progress_file.text + "  |  " + "  ".join(phase_parts)
                 )
 
+            # Show errors in a visible block so they can't be missed
+            if errors:
+                with self._progress_container, ui.expansion(
+                    f"⚠ {len(errors)} indexing error(s)",
+                    icon="warning",
+                ).classes("w-full text-orange-400").props("dense"):
+                        for err in errors[:20]:
+                            ui.label(err).classes("text-xs text-orange-300 font-mono")
+                        if len(errors) > 20:
+                            ui.label(f"… and {len(errors) - 20} more").classes(
+                                "text-xs text-gray-500"
+                            )
+
             ui.notify(
-                f"Indexing complete: {files} files, {chunks} chunks",
-                type="positive",
+                f"Indexing complete: {files} files, {chunks} chunks"
+                + (f" ({len(errors)} errors)" if errors else ""),
+                type="warning" if errors else "positive",
             )
         except RuntimeError:
             # UI elements deleted (client navigated away / page reload).
@@ -1708,14 +1817,14 @@ class IndexingPage:
             try:
                 self._progress_phase.set_text("❌ Error")
                 self._progress_file.set_text(str(exc))
-                ui.notify(f"Indexing failed: {exc}", type="negative")
+                ui.notify(f"Indexing failed: {exc}", type="negative", timeout=10000)
             except RuntimeError:
                 pass  # UI gone
         finally:
             self._stop_progress_polling()
             self._is_indexing = False
             try:
-                self._index_btn.props(remove='loading')
+                self._index_btn.props(remove="loading")
                 self._index_btn.set_enabled(True)
                 self._reindex_btn.set_enabled(True)
                 await self.refresh()
@@ -1723,7 +1832,7 @@ class IndexingPage:
                 pass  # UI gone
 
     async def _check_changes(self):
-        self._check_btn.props('loading')
+        self._check_btn.props("loading")
         self._changes_container.clear()
         try:
             changes = await run.io_bound(lambda: _safe_call("scan_file_changes"))
@@ -1766,7 +1875,7 @@ class IndexingPage:
         except Exception as exc:
             ui.notify(f"Error checking changes: {exc}", type="negative")
         finally:
-            self._check_btn.props(remove='loading')
+            self._check_btn.props(remove="loading")
 
 
 # ---------------------------------------------------------------------------
@@ -1791,24 +1900,24 @@ class ModelsPage:
     def build(self):
         with ui.column().classes("w-full gap-4"):
             ui.label("Models").classes("text-2xl font-bold text-white")
-            ui.label(
-                "Browse, download, and manage embedding & reranker models"
-            ).classes("text-sm text-gray-400 -mt-2")
+            ui.label("Browse, download, and manage embedding & reranker models").classes(
+                "text-sm text-gray-400 -mt-2"
+            )
 
             # Filter row
             with ui.row().classes("gap-2 items-center"):
                 ui.button("All", on_click=lambda: self._set_filter("all")).props(
-                    'flat no-caps size=sm'
+                    "flat no-caps size=sm"
                 )
                 ui.button("Embedding", on_click=lambda: self._set_filter("embedding")).props(
-                    'flat no-caps size=sm'
+                    "flat no-caps size=sm"
                 )
                 ui.button("Reranker", on_click=lambda: self._set_filter("reranker")).props(
-                    'flat no-caps size=sm'
+                    "flat no-caps size=sm"
                 )
                 ui.space()
                 ui.button("↻ Refresh", on_click=self._refresh).props(
-                    'flat no-caps size=sm color=primary'
+                    "flat no-caps size=sm color=primary"
                 )
 
             self._container = ui.column().classes("w-full gap-3")
@@ -1898,68 +2007,74 @@ class ModelsPage:
             status_icon = "○"
             status_text = "Not Downloaded"
 
-        with ui.card().classes(
-            "bg-[#1a1f2b] w-full p-4 border border-[#2a3040] hover:border-[#67d3ff44]"
+        with (
+            ui.card().classes(
+                "bg-[#1a1f2b] w-full p-4 border border-[#2a3040] hover:border-[#67d3ff44]"
+            ),
+            ui.row().classes("w-full items-start justify-between"),
         ):
-            with ui.row().classes("w-full items-start justify-between"):
-                # Left: info
-                with ui.column().classes("gap-1 flex-grow"):
-                    with ui.row().classes("items-center gap-2"):
-                        ui.label(display_name).classes("text-white font-semibold text-base")
-                        ui.label(f"{status_icon} {status_text}").classes(
-                            f"text-xs text-{status_color}-400"
+            # Left: info
+            with ui.column().classes("gap-1 flex-grow"):
+                with ui.row().classes("items-center gap-2"):
+                    ui.label(display_name).classes("text-white font-semibold text-base")
+                    ui.label(f"{status_icon} {status_text}").classes(
+                        f"text-xs text-{status_color}-400"
+                    )
+                    if is_default:
+                        ui.badge("Default", color="primary").props("dense")
+                    if trust_needed:
+                        ui.badge("trust_remote_code", color="orange").props("dense")
+
+                ui.label(name).classes("text-xs text-gray-500 font-mono")
+
+                if description:
+                    ui.label(description).classes("text-sm text-gray-300 mt-1")
+
+                # Tags row
+                with ui.row().classes("gap-1 mt-1 flex-wrap"):
+                    if model.get("type") == "embedding" and dims:
+                        ui.badge(f"{dims}d", color="teal").props("dense outline")
+                    if max_tokens:
+                        ctx_label = (
+                            f"{max_tokens // 1000}K ctx"
+                            if max_tokens >= 1000
+                            else f"{max_tokens} tokens"
                         )
-                        if is_default:
-                            ui.badge("Default", color="primary").props("dense")
-                        if trust_needed:
-                            ui.badge("trust_remote_code", color="orange").props("dense")
+                        ui.badge(ctx_label, color="teal").props("dense outline")
+                    if size_mb and provider == "local":
+                        ui.badge(f"~{size_mb} MB", color="grey").props("dense outline")
+                    if license_str and license_str != "Apache-2.0":
+                        ui.badge(license_str, color="amber").props("dense outline")
+                    for tag in tags[:4]:
+                        ui.badge(tag, color="grey-7").props("dense outline")
 
-                    ui.label(name).classes("text-xs text-gray-500 font-mono")
-
-                    if description:
-                        ui.label(description).classes("text-sm text-gray-300 mt-1")
-
-                    # Tags row
-                    with ui.row().classes("gap-1 mt-1 flex-wrap"):
-                        if model.get("type") == "embedding" and dims:
-                            ui.badge(f"{dims}d", color="teal").props("dense outline")
-                        if max_tokens:
-                            ctx_label = f"{max_tokens // 1000}K ctx" if max_tokens >= 1000 else f"{max_tokens} tokens"
-                            ui.badge(ctx_label, color="teal").props("dense outline")
-                        if size_mb and provider == "local":
-                            ui.badge(f"~{size_mb} MB", color="grey").props("dense outline")
-                        if license_str and license_str != "Apache-2.0":
-                            ui.badge(license_str, color="amber").props("dense outline")
-                        for tag in tags[:4]:
-                            ui.badge(tag, color="grey-7").props("dense outline")
-
-                # Right: actions
-                with ui.column().classes("gap-1 items-end min-w-32"):
-                    if provider == "local":
-                        if status in ("bundled", "downloaded"):
-                            # Already available
-                            ui.label("✓ Ready").classes("text-green-400 text-sm")
-                            if not is_default and status != "bundled":
-                                ui.button(
-                                    "🗑 Delete",
-                                    on_click=lambda n=name: self._confirm_delete(n),
-                                ).props('flat dense no-caps color=red size=sm')
-                        else:
-                            # Not downloaded
-                            if trust_needed:
-                                ui.button(
-                                    "⬇ Download (requires trust)",
-                                    on_click=lambda n=name: self._download_with_trust(n),
-                                ).props('dense no-caps color=primary size=sm')
-                            else:
-                                ui.button(
-                                    "⬇ Download",
-                                    on_click=lambda n=name: self._download_model(n),
-                                ).props('dense no-caps color=primary size=sm')
+            # Right: actions
+            with ui.column().classes("gap-1 items-end min-w-32"):
+                if provider == "local":
+                    if status in ("bundled", "downloaded"):
+                        # Already available
+                        ui.label("✓ Ready").classes("text-green-400 text-sm")
+                        if not is_default and status != "bundled":
+                            ui.button(
+                                "🗑 Delete",
+                                on_click=lambda n=name: self._confirm_delete(n),
+                            ).props("flat dense no-caps color=red size=sm")
                     else:
-                        # API model
-                        ui.label("☁ API-based").classes("text-blue-300 text-xs")
-                        ui.label("Set API key in Config").classes("text-gray-500 text-xs")
+                        # Not downloaded
+                        if trust_needed:
+                            ui.button(
+                                "⬇ Download (requires trust)",
+                                on_click=lambda n=name: self._download_with_trust(n),
+                            ).props("dense no-caps color=primary size=sm")
+                        else:
+                            ui.button(
+                                "⬇ Download",
+                                on_click=lambda n=name: self._download_model(n),
+                            ).props("dense no-caps color=primary size=sm")
+                else:
+                    # API model
+                    ui.label("☁ API-based").classes("text-blue-300 text-xs")
+                    ui.label("Set API key in Config").classes("text-gray-500 text-xs")
 
     async def _download_model(self, model_name: str):
         ui.notify(f"Downloading {model_name}…", type="info")
@@ -1989,11 +2104,11 @@ class ModelsPage:
             ).classes("text-sm text-gray-300")
 
             with ui.row().classes("w-full justify-end gap-2 mt-4"):
-                ui.button("Cancel", on_click=dlg.close).props('flat color=white')
+                ui.button("Cancel", on_click=dlg.close).props("flat color=white")
                 ui.button(
                     "Trust & Download",
                     on_click=lambda: self._do_trust_download(dlg, model_name),
-                ).props('color=amber')
+                ).props("color=amber")
         dlg.open()
 
     async def _do_trust_download(self, dlg, model_name: str):
@@ -2019,23 +2134,20 @@ class ModelsPage:
         with ui.dialog() as dlg, ui.card().classes("bg-[#1d232e] max-w-[90vw]"):
             ui.label("Delete Model?").classes("text-lg font-bold text-white")
             ui.label(
-                f"Delete locally downloaded '{model_name}'? "
-                f"You can re-download it later."
+                f"Delete locally downloaded '{model_name}'? You can re-download it later."
             ).classes("text-sm text-gray-400")
 
             with ui.row().classes("w-full justify-end gap-2 mt-4"):
-                ui.button("Cancel", on_click=dlg.close).props('flat color=white')
-                ui.button(
-                    "Delete", on_click=lambda: self._do_delete(dlg, model_name)
-                ).props('color=red')
+                ui.button("Cancel", on_click=dlg.close).props("flat color=white")
+                ui.button("Delete", on_click=lambda: self._do_delete(dlg, model_name)).props(
+                    "color=red"
+                )
         dlg.open()
 
     async def _do_delete(self, dlg, model_name: str):
         dlg.close()
         try:
-            await run.io_bound(
-                lambda: _safe_call("delete_model", model_name)
-            )
+            await run.io_bound(lambda: _safe_call("delete_model", model_name))
             ui.notify(f"Deleted {model_name}", type="positive")
             await self._refresh()
         except Exception as exc:
@@ -2073,11 +2185,11 @@ class ConfigPage:
 
             with ui.row().classes("gap-2 mt-2"):
                 ui.button("Save Configuration", icon="save", on_click=self._save).props(
-                    'color=primary'
+                    "color=primary"
                 )
-                ui.button("Reset to Defaults", icon="restart_alt", on_click=self._confirm_reset).props(
-                    'outline color=orange'
-                )
+                ui.button(
+                    "Reset to Defaults", icon="restart_alt", on_click=self._confirm_reset
+                ).props("outline color=orange")
 
             self._status_label = ui.label("").classes("text-sm text-gray-400")
 
@@ -2110,24 +2222,41 @@ class ConfigPage:
             ui.label("Embedding & Chunking").classes("config-section-title")
 
             from rag_kb.models import get_embedding_model_names
-            self._inputs["embedding_model"] = ui.select(
-                options=get_embedding_model_names(),
-                value=settings.get("embedding_model", "paraphrase-multilingual-MiniLM-L12-v2"),
-                label="Embedding Model",
-            ).props('outlined dark dense').classes("w-full max-w-md")
+
+            self._inputs["embedding_model"] = (
+                ui.select(
+                    options=get_embedding_model_names(),
+                    value=settings.get("embedding_model", "paraphrase-multilingual-MiniLM-L12-v2"),
+                    label="Embedding Model",
+                )
+                .props("outlined dark dense")
+                .classes("w-full max-w-md")
+            )
 
             with ui.row().classes("gap-4"):
-                self._inputs["chunk_size"] = ui.number(
-                    "Chunk Size",
-                    value=settings.get("chunk_size", 1024),
-                    min=64, max=8192, step=64,
-                ).props('outlined dark dense').classes("w-48")
+                self._inputs["chunk_size"] = (
+                    ui.number(
+                        "Chunk Size",
+                        value=settings.get("chunk_size", 1024),
+                        min=64,
+                        max=8192,
+                        step=64,
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-48")
+                )
 
-                self._inputs["chunk_overlap"] = ui.number(
-                    "Chunk Overlap",
-                    value=settings.get("chunk_overlap", 128),
-                    min=0, max=2048, step=16,
-                ).props('outlined dark dense').classes("w-48")
+                self._inputs["chunk_overlap"] = (
+                    ui.number(
+                        "Chunk Overlap",
+                        value=settings.get("chunk_overlap", 128),
+                        min=0,
+                        max=2048,
+                        step=16,
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-48")
+                )
 
             # --- Search Quality ---
             ui.label("Search Quality").classes("config-section-title")
@@ -2139,73 +2268,124 @@ class ConfigPage:
                         value=settings.get("reranking_enabled", True),
                     )
                     from rag_kb.models import get_reranker_model_names
-                    self._inputs["reranker_model"] = ui.select(
-                        options=get_reranker_model_names(),
-                        value=settings.get("reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"),
-                        label="Reranker Model",
-                    ).props('outlined dark dense').classes("w-80")
+
+                    self._inputs["reranker_model"] = (
+                        ui.select(
+                            options=get_reranker_model_names(),
+                            value=settings.get(
+                                "reranker_model", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+                            ),
+                            label="Reranker Model",
+                        )
+                        .props("outlined dark dense")
+                        .classes("w-80")
+                    )
 
                 with ui.column().classes("gap-2"):
                     self._inputs["hybrid_search_enabled"] = ui.switch(
                         "Hybrid search (vector + BM25)",
                         value=settings.get("hybrid_search_enabled", True),
                     )
-                    self._inputs["hybrid_search_alpha"] = ui.slider(
-                        min=0, max=1, step=0.05,
-                        value=settings.get("hybrid_search_alpha", 0.7),
-                    ).classes("w-64").props('label-always')
+                    self._inputs["hybrid_search_alpha"] = (
+                        ui.slider(
+                            min=0,
+                            max=1,
+                            step=0.05,
+                            value=settings.get("hybrid_search_alpha", 0.7),
+                        )
+                        .classes("w-64")
+                        .props("label-always")
+                    )
                     ui.label("0 = All BM25 ←→ 1 = All Vector").classes("text-xs text-gray-500")
 
             with ui.row().classes("gap-4 items-start"):
-                self._inputs["min_score_threshold"] = ui.number(
-                    "Min Score Threshold",
-                    value=settings.get("min_score_threshold", 0.15),
-                    min=0, max=1, step=0.05,
-                    format="%.2f",
-                ).props('outlined dark dense').classes("w-48")
+                self._inputs["min_score_threshold"] = (
+                    ui.number(
+                        "Min Score Threshold",
+                        value=settings.get("min_score_threshold", 0.15),
+                        min=0,
+                        max=1,
+                        step=0.05,
+                        format="%.2f",
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-48")
+                )
 
                 with ui.column().classes("gap-2"):
                     self._inputs["mmr_enabled"] = ui.switch(
                         "MMR diversity",
                         value=settings.get("mmr_enabled", True),
                     )
-                    self._inputs["mmr_lambda"] = ui.slider(
-                        min=0, max=1, step=0.05,
-                        value=settings.get("mmr_lambda", 0.7),
-                    ).classes("w-64").props('label-always')
-                    ui.label("0 = Max Diversity ←→ 1 = Max Relevance").classes("text-xs text-gray-500")
+                    self._inputs["mmr_lambda"] = (
+                        ui.slider(
+                            min=0,
+                            max=1,
+                            step=0.05,
+                            value=settings.get("mmr_lambda", 0.7),
+                        )
+                        .classes("w-64")
+                        .props("label-always")
+                    )
+                    ui.label("0 = Max Diversity ←→ 1 = Max Relevance").classes(
+                        "text-xs text-gray-500"
+                    )
 
             # --- Indexing Performance ---
             ui.label("Indexing Performance").classes("config-section-title")
 
             with ui.row().classes("gap-4"):
-                self._inputs["indexing_workers"] = ui.number(
-                    "Parallel Workers",
-                    value=settings.get("indexing_workers", 4),
-                    min=1, max=32, step=1,
-                ).props('outlined dark dense').classes("w-48")
+                self._inputs["indexing_workers"] = (
+                    ui.number(
+                        "Parallel Workers",
+                        value=settings.get("indexing_workers", 4),
+                        min=1,
+                        max=32,
+                        step=1,
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-48")
+                )
 
-                self._inputs["embedding_batch_size"] = ui.number(
-                    "Embedding Batch Size",
-                    value=settings.get("embedding_batch_size", 256),
-                    min=1, max=4096, step=32,
-                ).props('outlined dark dense').classes("w-48")
+                self._inputs["embedding_batch_size"] = (
+                    ui.number(
+                        "Embedding Batch Size",
+                        value=settings.get("embedding_batch_size", 256),
+                        min=1,
+                        max=4096,
+                        step=32,
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-48")
+                )
 
             # --- ChromaDB HNSW ---
             ui.label("ChromaDB HNSW Tuning").classes("config-section-title")
 
             with ui.row().classes("gap-4"):
-                self._inputs["hnsw_ef_construction"] = ui.number(
-                    "EF Construction",
-                    value=settings.get("hnsw_ef_construction", 200),
-                    min=16, max=1024, step=8,
-                ).props('outlined dark dense').classes("w-48")
+                self._inputs["hnsw_ef_construction"] = (
+                    ui.number(
+                        "EF Construction",
+                        value=settings.get("hnsw_ef_construction", 200),
+                        min=16,
+                        max=1024,
+                        step=8,
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-48")
+                )
 
-                self._inputs["hnsw_m"] = ui.number(
-                    "M Connections",
-                    value=settings.get("hnsw_m", 32),
-                    min=4, max=128, step=4,
-                ).props('outlined dark dense').classes("w-48")
+                self._inputs["hnsw_m"] = (
+                    ui.number(
+                        "M Connections",
+                        value=settings.get("hnsw_m", 32),
+                        min=4,
+                        max=128,
+                        step=4,
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-48")
+                )
 
             # --- API Keys ---
             ui.label("API Keys (for API-based models)").classes("config-section-title")
@@ -2215,34 +2395,52 @@ class ConfigPage:
             ).classes("text-xs text-gray-500")
 
             with ui.row().classes("gap-4"):
-                self._inputs["openai_api_key"] = ui.input(
-                    "OpenAI API Key",
-                    value=settings.get("openai_api_key", ""),
-                    password=True,
-                    password_toggle_button=True,
-                ).props('outlined dark dense').classes("w-80")
+                self._inputs["openai_api_key"] = (
+                    ui.input(
+                        "OpenAI API Key",
+                        value=settings.get("openai_api_key", ""),
+                        password=True,
+                        password_toggle_button=True,
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-80")
+                )
 
-                self._inputs["voyage_api_key"] = ui.input(
-                    "Voyage AI API Key",
-                    value=settings.get("voyage_api_key", ""),
-                    password=True,
-                    password_toggle_button=True,
-                ).props('outlined dark dense').classes("w-80")
+                self._inputs["voyage_api_key"] = (
+                    ui.input(
+                        "Voyage AI API Key",
+                        value=settings.get("voyage_api_key", ""),
+                        password=True,
+                        password_toggle_button=True,
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-80")
+                )
 
             # --- MCP Server ---
             ui.label("MCP Server").classes("config-section-title")
 
             with ui.row().classes("gap-4"):
-                self._inputs["host"] = ui.input(
-                    "Host",
-                    value=settings.get("host", "127.0.0.1"),
-                ).props('outlined dark dense').classes("w-48")
+                self._inputs["host"] = (
+                    ui.input(
+                        "Host",
+                        value=settings.get("host", "127.0.0.1"),
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-48")
+                )
 
-                self._inputs["port"] = ui.number(
-                    "Port",
-                    value=settings.get("port", 8080),
-                    min=1, max=65535, step=1,
-                ).props('outlined dark dense').classes("w-48")
+                self._inputs["port"] = (
+                    ui.number(
+                        "Port",
+                        value=settings.get("port", 8080),
+                        min=1,
+                        max=65535,
+                        step=1,
+                    )
+                    .props("outlined dark dense")
+                    .classes("w-48")
+                )
 
     def _gather_settings(self) -> dict:
         """Collect current form values into a settings dict."""
@@ -2251,8 +2449,10 @@ class ConfigPage:
             if hasattr(widget, "value"):
                 val = widget.value
                 # Convert number-like values
-                if isinstance(val, float) and val == int(val) and key not in (
-                    "hybrid_search_alpha", "mmr_lambda", "min_score_threshold"
+                if (
+                    isinstance(val, float)
+                    and val == int(val)
+                    and key not in ("hybrid_search_alpha", "mmr_lambda", "min_score_threshold")
                 ):
                     val = int(val)
                 result[key] = val
@@ -2275,16 +2475,15 @@ class ConfigPage:
                 "text-sm text-gray-400"
             )
             with ui.row().classes("w-full justify-end gap-2 mt-4"):
-                ui.button("Cancel", on_click=dlg.close).props('flat color=white')
-                ui.button(
-                    "Reset", on_click=lambda: self._do_reset(dlg)
-                ).props('color=orange')
+                ui.button("Cancel", on_click=dlg.close).props("flat color=white")
+                ui.button("Reset", on_click=lambda: self._do_reset(dlg)).props("color=orange")
         dlg.open()
 
     async def _do_reset(self, dlg):
         try:
             # Reset by saving a default settings dict
             from rag_kb.config import AppSettings
+
             defaults = AppSettings().model_dump()
             defaults.pop("supported_extensions", None)
             await run.io_bound(lambda: _safe_call("save_config", defaults))
@@ -2329,37 +2528,47 @@ class MonitoringPage:
             )
 
             # System Health section
-            with ui.expansion("System Health", icon="monitor_heart").classes(
-                "w-full bg-[#1d232e] rounded-xl border border-[#313949]"
-            ).props('default-opened dark dense'):
+            with (
+                ui.expansion("System Health", icon="monitor_heart")
+                .classes("w-full bg-[#1d232e] rounded-xl border border-[#313949]")
+                .props("default-opened dark dense")
+            ):
                 self._system_container = ui.column().classes("w-full gap-2 p-2")
                 with self._system_container:
                     _skeleton_metric_cards(5)
 
             # Indexing Pipeline section
-            with ui.expansion("Indexing Pipeline", icon="construction").classes(
-                "w-full bg-[#1d232e] rounded-xl border border-[#313949]"
-            ).props('default-opened dark dense'):
+            with (
+                ui.expansion("Indexing Pipeline", icon="construction")
+                .classes("w-full bg-[#1d232e] rounded-xl border border-[#313949]")
+                .props("default-opened dark dense")
+            ):
                 self._indexing_container = ui.column().classes("w-full gap-2 p-2")
                 with self._indexing_container:
                     _skeleton_metric_cards(6)
 
             # Embedding Performance section
-            with ui.expansion("Embedding Performance", icon="memory").classes(
-                "w-full bg-[#1d232e] rounded-xl border border-[#313949]"
-            ).props('dark dense'):
+            with (
+                ui.expansion("Embedding Performance", icon="memory")
+                .classes("w-full bg-[#1d232e] rounded-xl border border-[#313949]")
+                .props("dark dense")
+            ):
                 self._embedding_container = ui.column().classes("w-full gap-2 p-2")
 
             # Vector Store / ChromaDB section
-            with ui.expansion("Vector Store / ChromaDB", icon="storage").classes(
-                "w-full bg-[#1d232e] rounded-xl border border-[#313949]"
-            ).props('dark dense'):
+            with (
+                ui.expansion("Vector Store / ChromaDB", icon="storage")
+                .classes("w-full bg-[#1d232e] rounded-xl border border-[#313949]")
+                .props("dark dense")
+            ):
                 self._vector_container = ui.column().classes("w-full gap-2 p-2")
 
             # Search Performance section
-            with ui.expansion("Search Performance", icon="search").classes(
-                "w-full bg-[#1d232e] rounded-xl border border-[#313949]"
-            ).props('dark dense'):
+            with (
+                ui.expansion("Search Performance", icon="search")
+                .classes("w-full bg-[#1d232e] rounded-xl border border-[#313949]")
+                .props("dark dense")
+            ):
                 self._search_container = ui.column().classes("w-full gap-2 p-2")
 
             # Initial async refresh (runs after build returns)
@@ -2370,13 +2579,15 @@ class MonitoringPage:
 
     async def refresh(self):
         try:
-            data = await run.io_bound(lambda: {
-                "dashboard": _safe_call("get_metrics_dashboard"),
-                "vs_details": _safe_call("get_vector_store_details"),
-                "indexing_history": _safe_call("get_indexing_history", limit=20),
-                "search_stats": _safe_call("get_search_stats", limit=50),
-                "embedding_stats": _safe_call("get_embedding_stats", limit=50),
-            })
+            data = await run.io_bound(
+                lambda: {
+                    "dashboard": _safe_call("get_metrics_dashboard"),
+                    "vs_details": _safe_call("get_vector_store_details"),
+                    "indexing_history": _safe_call("get_indexing_history", limit=20),
+                    "search_stats": _safe_call("get_search_stats", limit=50),
+                    "embedding_stats": _safe_call("get_embedding_stats", limit=50),
+                }
+            )
         except RuntimeError:
             return  # UI elements deleted (page navigated away)
         except Exception as exc:
@@ -2421,8 +2632,12 @@ class MonitoringPage:
                 h, m = divmod(int(uptime), 3600)
                 mins = m // 60
                 self._metric_card("Daemon Uptime", f"{h}h {mins}m", "schedule")
-                self._metric_card("Active Conns", str(sys_snap.get("active_connections", 0)), "cable")
-                self._metric_card("Total RPC Calls", str(sys_snap.get("total_rpc_calls", 0)), "call_made")
+                self._metric_card(
+                    "Active Conns", str(sys_snap.get("active_connections", 0)), "cable"
+                )
+                self._metric_card(
+                    "Total RPC Calls", str(sys_snap.get("total_rpc_calls", 0)), "call_made"
+                )
 
     def _render_indexing(self, dashboard: dict, history: list[dict]):
         self._indexing_container.clear()
@@ -2449,9 +2664,7 @@ class MonitoringPage:
                 )
 
             if last:
-                ui.label("Last Run Phase Breakdown").classes(
-                    "text-sm font-bold text-gray-300 mt-2"
-                )
+                ui.label("Last Run Phase Breakdown").classes("text-sm font-bold text-gray-300 mt-2")
                 phases = [
                     ("Scan", last.get("scan_seconds", 0)),
                     ("Parse", last.get("parse_seconds", 0)),
@@ -2460,29 +2673,33 @@ class MonitoringPage:
                     ("Upsert", last.get("upsert_seconds", 0)),
                     ("Manifest", last.get("manifest_seconds", 0)),
                 ]
-                total_phase = sum(v for _, v in phases) or 1
+                sum(v for _, v in phases) or 1
                 # Waterfall bar chart using ECharts
-                ui.echart({
-                    "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
-                    "grid": {"left": "80px", "right": "40px", "top": "10px", "bottom": "30px"},
-                    "xAxis": {"type": "value", "name": "seconds"},
-                    "yAxis": {
-                        "type": "category",
-                        "data": [p[0] for p in phases],
-                        "inverse": True,
-                    },
-                    "series": [{
-                        "type": "bar",
-                        "data": [round(p[1], 3) for p in phases],
-                        "itemStyle": {"color": "#67d3ff"},
-                        "label": {
-                            "show": True,
-                            "position": "right",
-                            "formatter": "{c}s",
-                            "color": "#9daec1",
+                ui.echart(
+                    {
+                        "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+                        "grid": {"left": "80px", "right": "40px", "top": "10px", "bottom": "30px"},
+                        "xAxis": {"type": "value", "name": "seconds"},
+                        "yAxis": {
+                            "type": "category",
+                            "data": [p[0] for p in phases],
+                            "inverse": True,
                         },
-                    }],
-                }).classes("w-full h-48")
+                        "series": [
+                            {
+                                "type": "bar",
+                                "data": [round(p[1], 3) for p in phases],
+                                "itemStyle": {"color": "#67d3ff"},
+                                "label": {
+                                    "show": True,
+                                    "position": "right",
+                                    "formatter": "{c}s",
+                                    "color": "#9daec1",
+                                },
+                            }
+                        ],
+                    }
+                ).classes("w-full h-48")
 
                 with ui.row().classes("gap-6 mt-1"):
                     ui.label(
@@ -2494,23 +2711,28 @@ class MonitoringPage:
                     ).classes("text-xs text-gray-400")
 
             if history:
-                ui.label("Indexing Run History").classes(
-                    "text-sm font-bold text-gray-300 mt-4"
-                )
+                ui.label("Indexing Run History").classes("text-sm font-bold text-gray-300 mt-4")
                 rows = []
                 for h in history[:10]:
                     import datetime
+
                     ts = h.get("started_at", 0)
-                    dt = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "?"
-                    rows.append({
-                        "date": dt,
-                        "rag": h.get("rag_name", ""),
-                        "status": h.get("status", ""),
-                        "files": h.get("processed_files", 0),
-                        "chunks": h.get("total_chunks", 0),
-                        "duration": f"{h.get('duration_seconds', 0):.1f}s",
-                        "errors": h.get("error_count", 0),
-                    })
+                    dt = (
+                        datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+                        if ts
+                        else "?"
+                    )
+                    rows.append(
+                        {
+                            "date": dt,
+                            "rag": h.get("rag_name", ""),
+                            "status": h.get("status", ""),
+                            "files": h.get("processed_files", 0),
+                            "chunks": h.get("total_chunks", 0),
+                            "duration": f"{h.get('duration_seconds', 0):.1f}s",
+                            "errors": h.get("error_count", 0),
+                        }
+                    )
                 ui.table(
                     columns=[
                         {"name": "date", "label": "Date", "field": "date", "align": "left"},
@@ -2518,7 +2740,12 @@ class MonitoringPage:
                         {"name": "status", "label": "Status", "field": "status"},
                         {"name": "files", "label": "Files", "field": "files", "align": "right"},
                         {"name": "chunks", "label": "Chunks", "field": "chunks", "align": "right"},
-                        {"name": "duration", "label": "Duration", "field": "duration", "align": "right"},
+                        {
+                            "name": "duration",
+                            "label": "Duration",
+                            "field": "duration",
+                            "align": "right",
+                        },
                         {"name": "errors", "label": "Errors", "field": "errors", "align": "right"},
                     ],
                     rows=rows,
@@ -2531,7 +2758,9 @@ class MonitoringPage:
             agg = dashboard.get("embedding_aggregates") or {}
 
             with ui.row().classes("w-full gap-4 flex-wrap"):
-                self._metric_card("Total Batches", str(agg.get("total_batches", 0)), "batch_prediction")
+                self._metric_card(
+                    "Total Batches", str(agg.get("total_batches", 0)), "batch_prediction"
+                )
                 self._metric_card(
                     "Avg Batch Time",
                     f"{agg.get('avg_batch_ms', 0) or 0:.1f} ms",
@@ -2554,6 +2783,7 @@ class MonitoringPage:
                 throughputs = []
                 for s in reversed(stats[:30]):
                     import datetime
+
                     ts = s.get("timestamp", 0)
                     times.append(
                         datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else ""
@@ -2561,19 +2791,28 @@ class MonitoringPage:
                     throughputs.append(round(s.get("chunks_per_second", 0), 1))
 
                 if times:
-                    ui.echart({
-                        "tooltip": {"trigger": "axis"},
-                        "grid": {"left": "60px", "right": "20px", "top": "20px", "bottom": "30px"},
-                        "xAxis": {"type": "category", "data": times},
-                        "yAxis": {"type": "value", "name": "chunks/s"},
-                        "series": [{
-                            "type": "line",
-                            "data": throughputs,
-                            "smooth": True,
-                            "areaStyle": {"opacity": 0.15},
-                            "itemStyle": {"color": "#67d3ff"},
-                        }],
-                    }).classes("w-full h-48")
+                    ui.echart(
+                        {
+                            "tooltip": {"trigger": "axis"},
+                            "grid": {
+                                "left": "60px",
+                                "right": "20px",
+                                "top": "20px",
+                                "bottom": "30px",
+                            },
+                            "xAxis": {"type": "category", "data": times},
+                            "yAxis": {"type": "value", "name": "chunks/s"},
+                            "series": [
+                                {
+                                    "type": "line",
+                                    "data": throughputs,
+                                    "smooth": True,
+                                    "areaStyle": {"opacity": 0.15},
+                                    "itemStyle": {"color": "#67d3ff"},
+                                }
+                            ],
+                        }
+                    ).classes("w-full h-48")
 
     def _render_vector_store(self, dashboard: dict, vs_details: dict):
         self._vector_container.clear()
@@ -2583,8 +2822,12 @@ class MonitoringPage:
                 return
 
             with ui.row().classes("w-full gap-4 flex-wrap"):
-                self._metric_card("Total Chunks", str(vs_details.get("total_chunks", 0)), "data_object")
-                self._metric_card("Total Files", str(vs_details.get("total_files", 0)), "description")
+                self._metric_card(
+                    "Total Chunks", str(vs_details.get("total_chunks", 0)), "data_object"
+                )
+                self._metric_card(
+                    "Total Files", str(vs_details.get("total_files", 0)), "description"
+                )
                 self._metric_card(
                     "DB Size",
                     f"{vs_details.get('db_size_mb', 0):.1f} MB",
@@ -2598,12 +2841,12 @@ class MonitoringPage:
 
             hnsw = vs_details.get("hnsw_config", {})
             if hnsw:
-                ui.label("HNSW Index Configuration").classes(
-                    "text-sm font-bold text-gray-300 mt-2"
-                )
+                ui.label("HNSW Index Configuration").classes("text-sm font-bold text-gray-300 mt-2")
                 with ui.row().classes("gap-6"):
                     ui.label(f"Space: {hnsw.get('space', '?')}").classes("text-sm text-gray-400")
-                    ui.label(f"construction_ef: {hnsw.get('construction_ef', '?')}").classes("text-sm text-gray-400")
+                    ui.label(f"construction_ef: {hnsw.get('construction_ef', '?')}").classes(
+                        "text-sm text-gray-400"
+                    )
                     ui.label(f"M: {hnsw.get('M', '?')}").classes("text-sm text-gray-400")
 
             ui.label(f"DB Path: {vs_details.get('db_path', '?')}").classes(
@@ -2636,36 +2879,67 @@ class MonitoringPage:
             if stats:
                 # Latency breakdown chart (last N queries)
                 recent = list(reversed(stats[:20]))
-                labels = [f"Q{i+1}" for i in range(len(recent))]
+                labels = [f"Q{i + 1}" for i in range(len(recent))]
                 vec_ms = [round(s.get("vector_search_ms", 0), 1) for s in recent]
                 bm25_ms = [round(s.get("bm25_ms", 0), 1) for s in recent]
                 rerank_ms = [round(s.get("rerank_ms", 0), 1) for s in recent]
                 mmr_ms = [round(s.get("mmr_ms", 0), 1) for s in recent]
 
-                ui.echart({
-                    "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
-                    "legend": {"data": ["Vector", "BM25", "Rerank", "MMR"], "textStyle": {"color": "#9daec1"}},
-                    "grid": {"left": "60px", "right": "20px", "top": "40px", "bottom": "30px"},
-                    "xAxis": {"type": "category", "data": labels},
-                    "yAxis": {"type": "value", "name": "ms"},
-                    "series": [
-                        {"name": "Vector", "type": "bar", "stack": "total", "data": vec_ms, "itemStyle": {"color": "#2f79c6"}},
-                        {"name": "BM25", "type": "bar", "stack": "total", "data": bm25_ms, "itemStyle": {"color": "#27ae60"}},
-                        {"name": "Rerank", "type": "bar", "stack": "total", "data": rerank_ms, "itemStyle": {"color": "#f39c12"}},
-                        {"name": "MMR", "type": "bar", "stack": "total", "data": mmr_ms, "itemStyle": {"color": "#c0392b"}},
-                    ],
-                }).classes("w-full h-48")
+                ui.echart(
+                    {
+                        "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+                        "legend": {
+                            "data": ["Vector", "BM25", "Rerank", "MMR"],
+                            "textStyle": {"color": "#9daec1"},
+                        },
+                        "grid": {"left": "60px", "right": "20px", "top": "40px", "bottom": "30px"},
+                        "xAxis": {"type": "category", "data": labels},
+                        "yAxis": {"type": "value", "name": "ms"},
+                        "series": [
+                            {
+                                "name": "Vector",
+                                "type": "bar",
+                                "stack": "total",
+                                "data": vec_ms,
+                                "itemStyle": {"color": "#2f79c6"},
+                            },
+                            {
+                                "name": "BM25",
+                                "type": "bar",
+                                "stack": "total",
+                                "data": bm25_ms,
+                                "itemStyle": {"color": "#27ae60"},
+                            },
+                            {
+                                "name": "Rerank",
+                                "type": "bar",
+                                "stack": "total",
+                                "data": rerank_ms,
+                                "itemStyle": {"color": "#f39c12"},
+                            },
+                            {
+                                "name": "MMR",
+                                "type": "bar",
+                                "stack": "total",
+                                "data": mmr_ms,
+                                "itemStyle": {"color": "#c0392b"},
+                            },
+                        ],
+                    }
+                ).classes("w-full h-48")
 
     @staticmethod
     def _metric_card(label: str, value: str, icon: str = "analytics"):
-        with ui.card().classes(
-            "bg-[#22262e] border border-[#313949] rounded-lg p-3 min-w-[140px] flex-1"
+        with (
+            ui.card().classes(
+                "bg-[#22262e] border border-[#313949] rounded-lg p-3 min-w-[140px] flex-1"
+            ),
+            ui.row().classes("items-center gap-2"),
         ):
-            with ui.row().classes("items-center gap-2"):
-                ui.icon(icon).classes("text-[#67d3ff] text-lg")
-                with ui.column().classes("gap-0"):
-                    ui.label(value).classes("text-lg font-bold text-[#67d3ff]")
-                    ui.label(label).classes("text-xs text-gray-400")
+            ui.icon(icon).classes("text-[#67d3ff] text-lg")
+            with ui.column().classes("gap-0"):
+                ui.label(value).classes("text-lg font-bold text-[#67d3ff]")
+                ui.label(label).classes("text-xs text-gray-400")
 
 
 # ---------------------------------------------------------------------------
@@ -2713,7 +2987,7 @@ def _build_app():
             return
 
         # Destroy all existing pages' timers to prevent accumulation
-        for _pid, page in pages.items():
+        for page in pages.values():
             page.destroy()
 
         # Update nav button styles
@@ -2731,16 +3005,25 @@ def _build_app():
             pages[page_id].build()
 
     # ---- Header ----
-    with ui.header().classes(
-        "bg-[#11151c] items-center px-4 shadow-md"
-    ).props("elevated").style("height: 48px"):
-        ui.button(
-            icon="menu", on_click=lambda: drawer.toggle()
-        ).props("flat round color=white dense")
-        ui.label("RAG Knowledge Base").classes(
-            "text-white text-base font-bold ml-2"
+    with (
+        ui.header()
+        .classes("bg-[#11151c] items-center px-4 shadow-md")
+        .props("elevated")
+        .style("height: 48px")
+    ):
+        ui.button(icon="menu", on_click=lambda: drawer.toggle()).props(  # noqa: PLW0108
+            "flat round color=white dense"
         )
+        ui.label("RAG Knowledge Base").classes("text-white text-base font-bold ml-2")
         ui.space()
+
+        # Persistent indexing indicator — visible from any page
+        indexing_badge = ui.button(
+            "⏳ Indexing…",
+            on_click=lambda: switch_page("indexing"),
+        ).props("flat dense no-caps size=sm color=amber").classes("text-xs")
+        indexing_badge.set_visibility(False)
+
         daemon_label = ui.label("● Daemon").classes("text-xs text-green-400")
 
         async def check_daemon():
@@ -2753,31 +3036,61 @@ def _build_app():
                 daemon_label.set_text("● Daemon offline")
                 daemon_label.classes(replace="text-xs text-red-400")
 
+            # Update global indexing badge
+            try:
+                status = await run.io_bound(lambda: _safe_call("get_index_status"))
+                live = (status or {}).get("indexing")
+                if live and live.get("is_indexing"):
+                    pct = int(min(live.get("progress", 0.0), 1.0) * 100)
+                    indexing_badge.set_text(f"⏳ Indexing… {pct}%")
+                    indexing_badge.set_visibility(True)
+                else:
+                    indexing_badge.set_visibility(False)
+            except Exception:
+                pass
+
         ui.timer(30, check_daemon)
 
     # ---- Left Drawer (sidebar navigation) ----
-    with ui.left_drawer(
-        value=True, fixed=True, bordered=True
-    ).classes("bg-[#11151c] !p-0").props("width=220") as drawer:
-        ui.label("Offline RAG Manager").classes(
-            "text-gray-400 text-xs px-4 pt-4 pb-3"
-        )
+    drawer = ui.left_drawer(value=True, fixed=True, bordered=True)
+    with (
+        drawer
+        .classes("bg-[#11151c] !p-0")
+        .props("width=220")
+    ):
+        ui.label("Offline RAG Manager").classes("text-gray-400 text-xs px-4 pt-4 pb-3")
 
         for mat_icon, label, page_id in nav_items:
-            btn = ui.button(
-                label,
-                icon=mat_icon,
-                on_click=lambda _pid=page_id: switch_page(_pid),
-            ).props("flat no-caps align=left").classes("nav-btn nav-inactive")
+            btn = (
+                ui.button(
+                    label,
+                    icon=mat_icon,
+                    on_click=lambda _pid=page_id: switch_page(_pid),
+                )
+                .props("flat no-caps align=left")
+                .classes("nav-btn nav-inactive")
+            )
             nav_buttons[page_id] = btn
 
     # ---- Main content area ----
-    page_container = ui.column().classes(
-        "w-full p-4 sm:p-6 gap-0 page-content"
-    )
+    page_container = ui.column().classes("w-full p-4 sm:p-6 gap-0 page-content")
 
-    # Start on dashboard
+    # Start on dashboard.  A deferred check switches to the indexing page
+    # if the daemon reports an active indexing operation — avoids a
+    # synchronous blocking RPC call during page build which can fail with
+    # stale socket errors on Windows and stall the event loop.
     switch_page("dashboard")
+
+    async def _maybe_switch_to_indexing():
+        try:
+            status = await run.io_bound(lambda: _safe_call("get_index_status"))
+            live = (status or {}).get("indexing")
+            if live and live.get("is_indexing"):
+                switch_page("indexing")
+        except Exception:
+            pass
+
+    ui.timer(0.3, _maybe_switch_to_indexing, once=True)
 
 
 # ---------------------------------------------------------------------------
@@ -2810,8 +3123,14 @@ def launch_web_ui(
         datefmt="%H:%M:%S",
     )
     for lib in (
-        "chromadb", "sentence_transformers", "httpx", "httpcore",
-        "urllib3", "watchdog", "huggingface_hub", "transformers",
+        "chromadb",
+        "sentence_transformers",
+        "httpx",
+        "httpcore",
+        "urllib3",
+        "watchdog",
+        "huggingface_hub",
+        "transformers",
         "safetensors",
     ):
         logging.getLogger(lib).setLevel(logging.WARNING)
@@ -2820,7 +3139,7 @@ def launch_web_ui(
     try:
         _get_client()
     except Exception as exc:
-        logger.error("Failed to start daemon: %s", exc)
+        logger.exception("Failed to start daemon: %s", exc)  # noqa: TRY401
 
     # Find a free port if the requested one is already in use
     port = _find_free_port(host, port)

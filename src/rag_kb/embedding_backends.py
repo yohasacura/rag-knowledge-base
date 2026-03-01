@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import warnings
 from abc import ABC, abstractmethod
 from typing import Any
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Abstract base
 # ---------------------------------------------------------------------------
+
 
 class EmbeddingBackend(ABC):
     """Protocol / base class for all embedding backends."""
@@ -58,6 +60,7 @@ class EmbeddingBackend(ABC):
 # Local: sentence-transformers
 # ---------------------------------------------------------------------------
 
+
 class SentenceTransformerBackend(EmbeddingBackend):
     """Backend wrapping a local ``SentenceTransformer`` model."""
 
@@ -83,8 +86,7 @@ class SentenceTransformerBackend(EmbeddingBackend):
         resolved = get_model_path(model_name)
 
         # Silence noisy loggers
-        for name in ("huggingface_hub", "transformers",
-                      "sentence_transformers", "safetensors"):
+        for name in ("huggingface_hub", "transformers", "sentence_transformers", "safetensors"):
             logging.getLogger(name).setLevel(logging.ERROR)
 
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -157,14 +159,14 @@ class SentenceTransformerBackend(EmbeddingBackend):
                 # Last-resort: identify and log the offending entry
                 for idx, s in enumerate(sanitised):
                     if not isinstance(s, str):
-                        logger.error(
+                        logger.exception(
                             "Non-string detected at index %d: type=%s repr=%r",
-                            idx, type(s).__name__, s,
+                            idx,
+                            type(s).__name__,
+                            s,
                         )
                 # Replace every entry aggressively and retry
-                sanitised = [
-                    s if isinstance(s, str) else " " for s in sanitised
-                ]
+                sanitised = [s if isinstance(s, str) else " " for s in sanitised]
                 return self._model.encode(
                     sanitised,
                     batch_size=batch_size,
@@ -196,6 +198,7 @@ class SentenceTransformerBackend(EmbeddingBackend):
 # OpenAI API
 # ---------------------------------------------------------------------------
 
+
 class OpenAIEmbeddingBackend(EmbeddingBackend):
     """Backend using the OpenAI Embeddings API."""
 
@@ -217,16 +220,30 @@ class OpenAIEmbeddingBackend(EmbeddingBackend):
         self._dimensions = dimensions
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         if not self._api_key:
+            # Fall back to app settings (which also check RAG_KB_OPENAI_API_KEY env var)
+            try:
+                from rag_kb.config import AppSettings
+
+                self._api_key = AppSettings.load().resolve_openai_api_key()
+            except Exception:
+                pass
+        if not self._api_key:
             raise ValueError(
-                "OpenAI API key is required. Set OPENAI_API_KEY or provide it "
-                "in the settings."
+                "OpenAI API key is required. Set RAG_KB_OPENAI_API_KEY, "
+                "OPENAI_API_KEY, or provide it in settings."
             )
-        logger.info("OpenAI embedding backend initialised (%s, dim=%d).",
-                     self._api_model, dimensions)
+        self._client: Any = None  # cached OpenAI client
+        logger.info(
+            "OpenAI embedding backend initialised (%s, dim=%d).", self._api_model, dimensions
+        )
 
     def _get_client(self) -> Any:
-        import openai
-        return openai.OpenAI(api_key=self._api_key)
+        """Return a cached OpenAI client (reuses HTTP connection pool)."""
+        if self._client is None:
+            import openai
+
+            self._client = openai.OpenAI(api_key=self._api_key)
+        return self._client
 
     def embed_texts(
         self,
@@ -272,6 +289,7 @@ class OpenAIEmbeddingBackend(EmbeddingBackend):
 # Voyage AI API
 # ---------------------------------------------------------------------------
 
+
 class VoyageEmbeddingBackend(EmbeddingBackend):
     """Backend using the Voyage AI Embeddings API."""
 
@@ -293,16 +311,30 @@ class VoyageEmbeddingBackend(EmbeddingBackend):
         self._dimensions = dimensions
         self._api_key = api_key or os.environ.get("VOYAGE_API_KEY", "")
         if not self._api_key:
+            # Fall back to app settings (which also check RAG_KB_VOYAGE_API_KEY env var)
+            try:
+                from rag_kb.config import AppSettings
+
+                self._api_key = AppSettings.load().resolve_voyage_api_key()
+            except Exception:
+                pass
+        if not self._api_key:
             raise ValueError(
-                "Voyage AI API key is required. Set VOYAGE_API_KEY or provide "
-                "it in the settings."
+                "Voyage AI API key is required. Set RAG_KB_VOYAGE_API_KEY, "
+                "VOYAGE_API_KEY, or provide it in settings."
             )
-        logger.info("Voyage AI embedding backend initialised (%s, dim=%d).",
-                     self._api_model, dimensions)
+        self._client: Any = None  # cached Voyage client
+        logger.info(
+            "Voyage AI embedding backend initialised (%s, dim=%d).", self._api_model, dimensions
+        )
 
     def _get_client(self) -> Any:
-        import voyageai
-        return voyageai.Client(api_key=self._api_key)
+        """Return a cached Voyage client (reuses HTTP connection pool)."""
+        if self._client is None:
+            import voyageai
+
+            self._client = voyageai.Client(api_key=self._api_key)
+        return self._client
 
     def embed_texts(
         self,
@@ -345,12 +377,14 @@ class VoyageEmbeddingBackend(EmbeddingBackend):
 # Device detection (shared by local backends)
 # ---------------------------------------------------------------------------
 
+
 def _detect_device() -> str:
     """Auto-detect the best available compute device.
 
     Delegates to the centralised helper in :mod:`rag_kb.device`.
     """
     from rag_kb.device import detect_device
+
     return detect_device()
 
 
@@ -360,6 +394,7 @@ def _detect_device() -> str:
 
 # Singleton cache — one backend per (model_name, provider)
 _backend_cache: dict[str, EmbeddingBackend] = {}
+_backend_lock = threading.Lock()
 
 
 def get_embedding_backend(
@@ -373,11 +408,18 @@ def get_embedding_backend(
 
     Looks up the model registry to determine the provider and configuration.
     Backends are cached as singletons keyed by model name.
-    """
-    if model_name in _backend_cache and not force_reload:
-        return _backend_cache[model_name]
 
-    from rag_kb.models import get_model_spec, ModelProvider
+    Uses double-checked locking so that the heavy model-loading path does
+    not block concurrent callers that hit different (already-cached) models.
+    """
+    # Fast path — already cached (read under lock for visibility)
+    if not force_reload:
+        with _backend_lock:
+            if model_name in _backend_cache:
+                return _backend_cache[model_name]
+
+    # Slow path — create the backend outside the lock
+    from rag_kb.models import ModelProvider, get_model_spec
 
     spec = get_model_spec(model_name)
     provider = spec.provider if spec else ModelProvider.local
@@ -387,18 +429,43 @@ def get_embedding_backend(
     if provider == ModelProvider.openai:
         dims = spec.dimensions if spec else 1536
         backend = OpenAIEmbeddingBackend(
-            model_name, api_key=api_key, dimensions=dims,
+            model_name,
+            api_key=api_key,
+            dimensions=dims,
         )
     elif provider == ModelProvider.voyage:
         dims = spec.dimensions if spec else 1024
         backend = VoyageEmbeddingBackend(
-            model_name, api_key=api_key, dimensions=dims,
+            model_name,
+            api_key=api_key,
+            dimensions=dims,
         )
     else:
         # Local sentence-transformers
-        trust = trust_remote_code if trust_remote_code is not None else (
-            spec.trust_remote_code if spec else False
+        trust = (
+            trust_remote_code
+            if trust_remote_code is not None
+            else (spec.trust_remote_code if spec else False)
         )
+
+        # Safety gate: refuse trust_remote_code unless the model is in
+        # the user's explicitly trusted list.
+        if trust:
+            try:
+                from rag_kb.config import AppSettings
+
+                settings = AppSettings.load()
+                if model_name not in settings.trusted_models:
+                    logger.warning(
+                        "Model '%s' requires trust_remote_code=True but is not in "
+                        "trusted_models. Run 'rag-kb models trust %s' first.",
+                        model_name,
+                        model_name,
+                    )
+                    trust = False
+            except Exception:
+                trust = False
+
         q_prefix = spec.query_prefix if spec else None
         d_prefix = spec.document_prefix if spec else None
 
@@ -409,10 +476,16 @@ def get_embedding_backend(
             document_prefix=d_prefix,
         )
 
-    _backend_cache[model_name] = backend
+    # Re-acquire lock for cache insertion
+    with _backend_lock:
+        if model_name in _backend_cache and not force_reload:
+            # Another thread loaded this while we were working
+            return _backend_cache[model_name]
+        _backend_cache[model_name] = backend
     return backend
 
 
 def clear_backend_cache() -> None:
     """Remove all cached backends (used on model switch)."""
-    _backend_cache.clear()
+    with _backend_lock:
+        _backend_cache.clear()

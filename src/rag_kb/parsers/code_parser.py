@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 # Pre-compiled regex patterns for doc-comment extraction
 _RE_PY_DOCSTRING_DQ = re.compile(r'"""(.*?)"""', re.DOTALL)
@@ -157,8 +157,19 @@ def _extract_doc_summary(text: str, lang: str) -> str:
 
     # C-style block comments (Java, JS, TS, C, C++, Go, Rust, etc.)
     if lang in (
-        "javascript", "typescript", "java", "c", "cpp", "csharp",
-        "go", "rust", "kotlin", "scala", "swift", "dart", "php",
+        "javascript",
+        "typescript",
+        "java",
+        "c",
+        "cpp",
+        "csharp",
+        "go",
+        "rust",
+        "kotlin",
+        "scala",
+        "swift",
+        "dart",
+        "php",
     ):
         m = _RE_C_BLOCK_COMMENT.search(header)
         if m:

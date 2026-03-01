@@ -8,7 +8,9 @@ change detection from O(N × query) to O(N × stat).
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
+import threading
 from pathlib import Path
 from typing import NamedTuple
 
@@ -52,13 +54,48 @@ class FileManifest:
     );
     """
 
+    _STATS_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS _stats (
+        key   TEXT PRIMARY KEY,
+        value INTEGER NOT NULL DEFAULT 0
+    );
+    """
+
+    # Class-level registry of live instances, keyed by normalised db_path.
+    # Used by core.py delete_rag to close manifests without walking gc.
+    _instances: dict[str, FileManifest] = {}
+    _instances_lock = threading.Lock()
+
+    @classmethod
+    def _norm(cls, p: str) -> str:
+        return os.path.normcase(os.path.normpath(p))
+
+    @classmethod
+    def close_for_path(cls, db_path: str | Path) -> None:
+        """Close and unregister any manifest whose db resides under *db_path*."""
+        norm = cls._norm(str(db_path))
+        with cls._instances_lock:
+            to_close = [
+                (k, v) for k, v in cls._instances.items()
+                if k.startswith(norm) or k == norm
+            ]
+            for _k, inst in to_close:
+                try:
+                    inst.close()
+                except Exception:
+                    pass
+
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = str(db_path)
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False, timeout=5)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(self._SCHEMA)
+        self._conn.execute(self._STATS_SCHEMA)
         self._conn.commit()
+        # Register this instance
+        with FileManifest._instances_lock:
+            FileManifest._instances[FileManifest._norm(self._db_path)] = self
 
     # ------------------------------------------------------------------
     # Public helpers
@@ -224,9 +261,7 @@ class FileManifest:
         for i in range(0, len(paths), _SQL_BATCH):
             sub = paths[i : i + _SQL_BATCH]
             placeholders = ",".join("?" for _ in sub)
-            self._conn.execute(
-                f"DELETE FROM files WHERE path IN ({placeholders})", sub
-            )
+            self._conn.execute(f"DELETE FROM files WHERE path IN ({placeholders})", sub)
         self._conn.commit()
 
     def invalidate(self, path: str | Path) -> None:
@@ -271,6 +306,61 @@ class FileManifest:
         cur = self._conn.execute("SELECT COUNT(*) FROM files")
         return cur.fetchone()[0]
 
+    def total_chunks(self) -> int:
+        """Return sum of chunk_count across all files."""
+        cur = self._conn.execute("SELECT COALESCE(SUM(chunk_count), 0) FROM files")
+        return cur.fetchone()[0]
+
+    # ------------------------------------------------------------------
+    # Cached stats (zero-cost status lookups)
+    # ------------------------------------------------------------------
+
+    def save_stats(self, total_files: int, total_chunks: int) -> None:
+        """Persist aggregate stats so status polls never touch ChromaDB."""
+        self._conn.executemany(
+            "INSERT INTO _stats (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [("total_files", total_files), ("total_chunks", total_chunks)],
+        )
+        self._conn.commit()
+
+    def get_cached_stats(self) -> tuple[int, int] | None:
+        """Return ``(total_files, total_chunks)`` or *None* if not yet cached."""
+        try:
+            cur = self._conn.execute(
+                "SELECT key, value FROM _stats WHERE key IN ('total_files', 'total_chunks')"
+            )
+            rows = {r[0]: r[1] for r in cur.fetchall()}
+            if "total_files" in rows and "total_chunks" in rows:
+                return rows["total_files"], rows["total_chunks"]
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def read_cached_stats(db_path: str | Path) -> tuple[int, int] | None:
+        """Read cached stats from a manifest file without opening a full instance.
+
+        This is a static "peek" method that opens a short-lived read-only
+        connection, ideal for the hot ``index.status`` polling path.
+        """
+        p = Path(db_path)
+        if not p.exists():
+            return None
+        try:
+            conn = sqlite3.connect(str(p), check_same_thread=False, timeout=2)
+            conn.execute("PRAGMA journal_mode=WAL")
+            cur = conn.execute(
+                "SELECT key, value FROM _stats WHERE key IN ('total_files', 'total_chunks')"
+            )
+            rows = {r[0]: r[1] for r in cur.fetchall()}
+            conn.close()
+            if "total_files" in rows and "total_chunks" in rows:
+                return rows["total_files"], rows["total_chunks"]
+        except Exception:
+            pass
+        return None
+
     def clear(self) -> None:
         """Remove all entries (used during full rebuild)."""
         self._conn.execute("DELETE FROM files")
@@ -279,6 +369,10 @@ class FileManifest:
     def close(self) -> None:
         """Close the underlying SQLite connection."""
         self._conn.close()
+        # Unregister from the class-level registry
+        norm = FileManifest._norm(self._db_path)
+        with FileManifest._instances_lock:
+            FileManifest._instances.pop(norm, None)
 
     # ------------------------------------------------------------------
     # Migration helper

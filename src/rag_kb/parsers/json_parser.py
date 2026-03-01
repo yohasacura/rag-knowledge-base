@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +52,11 @@ class JsonParser:
         """Parse JSON Lines format — one JSON object per line."""
         records: list[str] = []
         for i, line in enumerate(raw.strip().splitlines(), 1):
-            line = line.strip()
-            if not line:
+            stripped = line.strip()
+            if not stripped:
                 continue
             try:
-                obj = json.loads(line)
+                obj = json.loads(stripped)
                 flat = _flatten(obj, prefix=f"record_{i}")
                 records.extend(flat)
                 records.append("")  # blank separator

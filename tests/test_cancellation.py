@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import threading
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rag_kb.indexer import Indexer, IndexingCancelledError, IndexingState
-
+from rag_kb.indexer import Indexer, IndexingCancelledError
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def tmp_rag(tmp_path):
@@ -73,6 +72,7 @@ def mock_registry():
 # Tests: IndexingCancelledError
 # ---------------------------------------------------------------------------
 
+
 class TestIndexingCancelledError:
     def test_is_exception(self):
         err = IndexingCancelledError("cancelled")
@@ -84,11 +84,14 @@ class TestIndexingCancelledError:
 # Tests: Cancel event basics
 # ---------------------------------------------------------------------------
 
+
 class TestCancelEvent:
     def test_cancel_sets_event(self, tmp_rag, mock_settings, mock_registry):
         cancel_event = threading.Event()
         indexer = Indexer(
-            tmp_rag, mock_registry, mock_settings,
+            tmp_rag,
+            mock_registry,
+            mock_settings,
             cancel_event=cancel_event,
         )
         assert not cancel_event.is_set()
@@ -98,7 +101,9 @@ class TestCancelEvent:
     def test_check_cancelled_raises_when_set(self, tmp_rag, mock_settings, mock_registry):
         cancel_event = threading.Event()
         indexer = Indexer(
-            tmp_rag, mock_registry, mock_settings,
+            tmp_rag,
+            mock_registry,
+            mock_settings,
             cancel_event=cancel_event,
         )
         # Should not raise when event is not set
@@ -118,7 +123,9 @@ class TestCancelEvent:
             progress_states.append(state.status)
 
         indexer = Indexer(
-            tmp_rag, mock_registry, mock_settings,
+            tmp_rag,
+            mock_registry,
+            mock_settings,
             on_progress=on_progress,
             cancel_event=cancel_event,
         )
@@ -133,7 +140,9 @@ class TestCancelEvent:
         """Verify that cancel_event set from another thread is visible."""
         cancel_event = threading.Event()
         indexer = Indexer(
-            tmp_rag, mock_registry, mock_settings,
+            tmp_rag,
+            mock_registry,
+            mock_settings,
             cancel_event=cancel_event,
         )
 
@@ -161,18 +170,26 @@ class TestCancelEvent:
 # Tests: Indexer.index() cancellation behaviour
 # ---------------------------------------------------------------------------
 
+
 class TestIndexCancellation:
     @patch("rag_kb.indexer.embed_texts")
     @patch("rag_kb.indexer.VectorStore")
     def test_cancel_before_start_returns_cancelled(
-        self, MockStore, mock_embed, tmp_rag, mock_settings, mock_registry,
+        self,
+        MockStore,
+        mock_embed,
+        tmp_rag,
+        mock_settings,
+        mock_registry,
     ):
         """If cancel is set before index() starts, it should return cancelled."""
         cancel_event = threading.Event()
         cancel_event.set()  # Pre-cancelled
 
         indexer = Indexer(
-            tmp_rag, mock_registry, mock_settings,
+            tmp_rag,
+            mock_registry,
+            mock_settings,
             cancel_event=cancel_event,
         )
         state = indexer.index(full=False)
@@ -181,7 +198,12 @@ class TestIndexCancellation:
     @patch("rag_kb.indexer.embed_texts")
     @patch("rag_kb.indexer.VectorStore")
     def test_cancel_produces_cancelled_status(
-        self, MockStore, mock_embed, tmp_rag, mock_settings, mock_registry,
+        self,
+        MockStore,
+        mock_embed,
+        tmp_rag,
+        mock_settings,
+        mock_registry,
     ):
         """Cancellation during indexing should produce status='cancelled'."""
         cancel_event = threading.Event()
@@ -194,7 +216,9 @@ class TestIndexCancellation:
                 cancel_event.set()
 
         indexer = Indexer(
-            tmp_rag, mock_registry, mock_settings,
+            tmp_rag,
+            mock_registry,
+            mock_settings,
             on_progress=on_progress,
             cancel_event=cancel_event,
         )
@@ -206,14 +230,21 @@ class TestIndexCancellation:
     @patch("rag_kb.indexer.embed_texts")
     @patch("rag_kb.indexer.VectorStore")
     def test_cancel_records_duration(
-        self, MockStore, mock_embed, tmp_rag, mock_settings, mock_registry,
+        self,
+        MockStore,
+        mock_embed,
+        tmp_rag,
+        mock_settings,
+        mock_registry,
     ):
         """Cancellation should still record duration_seconds."""
         cancel_event = threading.Event()
         cancel_event.set()
 
         indexer = Indexer(
-            tmp_rag, mock_registry, mock_settings,
+            tmp_rag,
+            mock_registry,
+            mock_settings,
             cancel_event=cancel_event,
         )
         state = indexer.index(full=False)
@@ -222,14 +253,21 @@ class TestIndexCancellation:
     @patch("rag_kb.indexer.embed_texts")
     @patch("rag_kb.indexer.VectorStore")
     def test_cancel_removes_lock_file(
-        self, MockStore, mock_embed, tmp_rag, mock_settings, mock_registry,
+        self,
+        MockStore,
+        mock_embed,
+        tmp_rag,
+        mock_settings,
+        mock_registry,
     ):
         """Lock file should be cleaned up even on cancellation."""
         cancel_event = threading.Event()
         cancel_event.set()
 
         indexer = Indexer(
-            tmp_rag, mock_registry, mock_settings,
+            tmp_rag,
+            mock_registry,
+            mock_settings,
             cancel_event=cancel_event,
         )
         state = indexer.index(full=False)
@@ -240,6 +278,7 @@ class TestIndexCancellation:
 # ---------------------------------------------------------------------------
 # Tests: core.py cancel_indexing()
 # ---------------------------------------------------------------------------
+
 
 class TestCoreCancelIndexing:
     def test_cancel_no_running_indexer(self):
@@ -272,6 +311,7 @@ class TestCoreCancelIndexing:
 # Tests: Lock file basics
 # ---------------------------------------------------------------------------
 
+
 class TestLockFile:
     def test_write_and_remove_lock_file(self, tmp_rag, mock_settings, mock_registry):
         indexer = Indexer(tmp_rag, mock_registry, mock_settings)
@@ -280,7 +320,7 @@ class TestLockFile:
         indexer._write_lock_file(full=False)
         assert os.path.exists(lock_path)
 
-        with open(lock_path, "r") as f:
+        with open(lock_path) as f:
             data = json.load(f)
         assert "started_at" in data
         assert "pid" in data
@@ -294,7 +334,7 @@ class TestLockFile:
         lock_path = os.path.join(tmp_rag.db_path, ".indexing_lock")
 
         indexer._write_lock_file(full=True)
-        with open(lock_path, "r") as f:
+        with open(lock_path) as f:
             data = json.load(f)
         assert data["full"] is True
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,6 @@ class XlsxParser:
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
             rows: list[str] = []
-            header: list[str] = []
 
             for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
                 cells = [str(c).strip() if c is not None else "" for c in row]
@@ -39,7 +38,6 @@ class XlsxParser:
                     continue
 
                 if row_idx == 0:
-                    header = cells
                     rows.append(" | ".join(cells))
                     rows.append(" | ".join("---" for _ in cells))
                 else:

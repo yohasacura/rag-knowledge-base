@@ -55,12 +55,11 @@ def onnxruntime_has_cuda() -> bool:
         providers = ort.get_available_providers()
         if "CUDAExecutionProvider" in providers:
             logger.info(
-                "ONNX Runtime CUDA provider available — "
-                "RapidOCR / ONNX models will use GPU."
+                "ONNX Runtime CUDA provider available — RapidOCR / ONNX models will use GPU."
             )
             return True
     except ImportError:
         pass
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.debug("Could not query ONNX Runtime providers: %s", exc)
     return False

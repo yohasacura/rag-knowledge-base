@@ -12,7 +12,7 @@ import io
 import logging
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,9 @@ class DocxParser:
         try:
             from docx import Document
         except ImportError as exc:
-            raise ImportError("python-docx is required for DOCX parsing: pip install python-docx") from exc
+            raise ImportError(
+                "python-docx is required for DOCX parsing: pip install python-docx"
+            ) from exc
 
         doc = Document(str(file_path))
         parts: list[str] = []
@@ -50,6 +52,7 @@ class DocxParser:
             # --- Table ---
             elif tag == qn("w:tbl"):
                 from docx.table import Table
+
                 table = Table(element, doc)
                 for row in table.rows:
                     row_text = " | ".join(
@@ -121,6 +124,7 @@ class DocxParser:
         """
         from docx.oxml.ns import qn
         from PIL import Image as PILImage
+
         from rag_kb.parsers.image_parser import ocr_image
 
         try:
@@ -144,7 +148,7 @@ class DocxParser:
             if pil_img.width < 50 or pil_img.height < 50:
                 return "", False
 
-            ocr_text, engine = ocr_image(pil_img, label=f"docx-image/{r_embed}")
+            ocr_text, _engine = ocr_image(pil_img, label=f"docx-image/{r_embed}")
             return ocr_text, bool(ocr_text)
 
         except Exception as exc:

@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 # Pre-compiled patterns (avoid re-compilation per file)
 _RE_MD_HEADING = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _RE_CODE_PYTHON = re.compile(r"^((?:async\s+)?def\s+\w+|class\s+\w+)", re.MULTILINE)
-_RE_CODE_JSTS = re.compile(r"^(?:export\s+)?(?:function\s+\w+|class\s+\w+|const\s+\w+\s*=)", re.MULTILINE)
+_RE_CODE_JSTS = re.compile(
+    r"^(?:export\s+)?(?:function\s+\w+|class\s+\w+|const\s+\w+\s*=)", re.MULTILINE
+)
 _RE_PDF_PAGE = re.compile(r"\[PAGE\s+(\d+)\]")
 
 
@@ -52,9 +54,11 @@ _SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
 # Structure-aware section splitting
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Section:
     """A structural section extracted from a document."""
+
     heading: str
     text: str
     start_char: int  # offset in the original document
@@ -122,11 +126,13 @@ def _split_markdown_sections(text: str) -> list[Section]:
         sec_text = text[sec_start:sec_end].strip()
 
         if sec_text:
-            sections.append(Section(
-                heading=full_heading,
-                text=sec_text,
-                start_char=sec_start,
-            ))
+            sections.append(
+                Section(
+                    heading=full_heading,
+                    text=sec_text,
+                    start_char=sec_start,
+                )
+            )
 
     return sections if sections else [Section(heading="", text=text, start_char=0)]
 
@@ -163,11 +169,13 @@ def _split_code_sections(text: str) -> list[Section]:
         sec_text = text[sec_start:sec_end].strip()
 
         if sec_text:
-            sections.append(Section(
-                heading=heading,
-                text=sec_text,
-                start_char=sec_start,
-            ))
+            sections.append(
+                Section(
+                    heading=heading,
+                    text=sec_text,
+                    start_char=sec_start,
+                )
+            )
 
     return sections if sections else [Section(heading="", text=text, start_char=0)]
 
@@ -194,11 +202,13 @@ def _split_pdf_sections(text: str) -> list[Section]:
         sec_text = text[sec_start:sec_end].strip()
 
         if sec_text:
-            sections.append(Section(
-                heading=heading,
-                text=sec_text,
-                start_char=sec_start,
-            ))
+            sections.append(
+                Section(
+                    heading=heading,
+                    text=sec_text,
+                    start_char=sec_start,
+                )
+            )
 
     return sections if sections else [Section(heading="", text=text, start_char=0)]
 
@@ -206,6 +216,7 @@ def _split_pdf_sections(text: str) -> list[Section]:
 # ---------------------------------------------------------------------------
 # Main chunking API
 # ---------------------------------------------------------------------------
+
 
 def chunk_text(
     text: str,
@@ -282,7 +293,8 @@ def chunk_text(
                         text=display_text,
                         source_file=source_file,
                         chunk_index=global_idx,
-                        start_char=section.start_char + (overlap_start if overlap_start < start else start),
+                        start_char=section.start_char
+                        + (overlap_start if overlap_start < start else start),
                         end_char=section.start_char + end,
                         metadata=chunk_meta,
                     )
@@ -298,19 +310,20 @@ def chunk_text(
 # Recursive splitting
 # ---------------------------------------------------------------------------
 
+
 def _recursive_split(text: str, max_size: int, separators: list[str]) -> list[str]:
     """Recursively split *text* on successively finer separators."""
     if len(text) <= max_size:
         return [text]
 
     if not separators:
-        return [text[i: i + max_size] for i in range(0, len(text), max_size)]
+        return [text[i : i + max_size] for i in range(0, len(text), max_size)]
 
     sep = separators[0]
     rest = separators[1:]
 
     if sep == "":
-        return [text[i: i + max_size] for i in range(0, len(text), max_size)]
+        return [text[i : i + max_size] for i in range(0, len(text), max_size)]
 
     parts = text.split(sep)
     result: list[str] = []

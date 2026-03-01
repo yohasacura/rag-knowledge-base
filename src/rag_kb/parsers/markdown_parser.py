@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 # Pre-compiled regex patterns (avoid re-compilation per file)
 _RE_TITLE = re.compile(r"^#\s+(.+)$", re.MULTILINE)

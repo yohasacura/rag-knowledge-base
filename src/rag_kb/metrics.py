@@ -20,7 +20,7 @@ import os
 import sqlite3
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -36,15 +36,16 @@ logger = logging.getLogger(__name__)
 @dataclass
 class IndexingRunMetrics:
     """Summary of a single indexing run."""
+
     rag_name: str
-    started_at: float                    # time.time()
+    started_at: float  # time.time()
     duration_seconds: float = 0.0
     total_files: int = 0
     processed_files: int = 0
     skipped_files: int = 0
     total_chunks: int = 0
     error_count: int = 0
-    status: str = "completed"            # completed | cancelled | error
+    status: str = "completed"  # completed | cancelled | error
     # Phase timings (seconds)
     scan_seconds: float = 0.0
     parse_seconds: float = 0.0
@@ -61,20 +62,22 @@ class IndexingRunMetrics:
 @dataclass
 class EmbeddingBatchMetrics:
     """Metrics for a single embedding batch."""
+
     rag_name: str
-    timestamp: float                     # time.time()
-    backend: str = ""                    # sentence_transformer | openai | voyage
+    timestamp: float  # time.time()
+    backend: str = ""  # sentence_transformer | openai | voyage
     model_name: str = ""
     batch_size: int = 0
     dimension: int = 0
     duration_ms: float = 0.0
     chunks_per_second: float = 0.0
-    device: str = ""                     # cpu | cuda | mps
+    device: str = ""  # cpu | cuda | mps
 
 
 @dataclass
 class SearchQueryMetrics:
     """Metrics for a single search query."""
+
     rag_name: str
     timestamp: float
     query_length: int = 0
@@ -94,6 +97,7 @@ class SearchQueryMetrics:
 @dataclass
 class VectorStoreSnapshot:
     """Point-in-time snapshot of vector store health."""
+
     rag_name: str
     timestamp: float
     total_chunks: int = 0
@@ -106,6 +110,7 @@ class VectorStoreSnapshot:
 @dataclass
 class SystemSnapshot:
     """Point-in-time snapshot of system resource usage."""
+
     timestamp: float
     cpu_percent: float = 0.0
     memory_used_mb: float = 0.0
@@ -256,15 +261,29 @@ class MetricsStore:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(sql, (
-                    m.rag_name, m.started_at, m.duration_seconds,
-                    m.total_files, m.processed_files, m.skipped_files,
-                    m.total_chunks, m.error_count, m.status,
-                    m.scan_seconds, m.parse_seconds, m.chunk_seconds,
-                    m.embed_seconds, m.upsert_seconds, m.manifest_seconds,
-                    m.chunks_per_second, m.files_per_second,
-                    int(m.is_full_reindex),
-                ))
+                conn.execute(
+                    sql,
+                    (
+                        m.rag_name,
+                        m.started_at,
+                        m.duration_seconds,
+                        m.total_files,
+                        m.processed_files,
+                        m.skipped_files,
+                        m.total_chunks,
+                        m.error_count,
+                        m.status,
+                        m.scan_seconds,
+                        m.parse_seconds,
+                        m.chunk_seconds,
+                        m.embed_seconds,
+                        m.upsert_seconds,
+                        m.manifest_seconds,
+                        m.chunks_per_second,
+                        m.files_per_second,
+                        int(m.is_full_reindex),
+                    ),
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -279,11 +298,20 @@ class MetricsStore:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(sql, (
-                    m.rag_name, m.timestamp, m.backend, m.model_name,
-                    m.batch_size, m.dimension, m.duration_ms,
-                    m.chunks_per_second, m.device,
-                ))
+                conn.execute(
+                    sql,
+                    (
+                        m.rag_name,
+                        m.timestamp,
+                        m.backend,
+                        m.model_name,
+                        m.batch_size,
+                        m.dimension,
+                        m.duration_ms,
+                        m.chunks_per_second,
+                        m.device,
+                    ),
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -299,12 +327,24 @@ class MetricsStore:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(sql, (
-                    m.rag_name, m.timestamp, m.query_length, m.top_k,
-                    m.results_returned, m.total_duration_ms,
-                    m.vector_search_ms, m.bm25_ms, m.fusion_ms,
-                    m.rerank_ms, m.mmr_ms, m.top_score, m.min_score,
-                ))
+                conn.execute(
+                    sql,
+                    (
+                        m.rag_name,
+                        m.timestamp,
+                        m.query_length,
+                        m.top_k,
+                        m.results_returned,
+                        m.total_duration_ms,
+                        m.vector_search_ms,
+                        m.bm25_ms,
+                        m.fusion_ms,
+                        m.rerank_ms,
+                        m.mmr_ms,
+                        m.top_score,
+                        m.min_score,
+                    ),
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -319,10 +359,18 @@ class MetricsStore:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(sql, (
-                    m.rag_name, m.timestamp, m.total_chunks, m.total_files,
-                    m.db_size_bytes, m.avg_chunks_per_file, m.collection_name,
-                ))
+                conn.execute(
+                    sql,
+                    (
+                        m.rag_name,
+                        m.timestamp,
+                        m.total_chunks,
+                        m.total_files,
+                        m.db_size_bytes,
+                        m.avg_chunks_per_file,
+                        m.collection_name,
+                    ),
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -339,13 +387,22 @@ class MetricsStore:
         with self._lock:
             conn = self._connect()
             try:
-                conn.execute(sql, (
-                    m.timestamp, m.cpu_percent, m.memory_used_mb,
-                    m.memory_total_mb, m.memory_percent,
-                    m.disk_used_mb, m.disk_free_mb,
-                    m.daemon_uptime_seconds, m.active_connections,
-                    m.total_rpc_calls, m.process_memory_mb,
-                ))
+                conn.execute(
+                    sql,
+                    (
+                        m.timestamp,
+                        m.cpu_percent,
+                        m.memory_used_mb,
+                        m.memory_total_mb,
+                        m.memory_percent,
+                        m.disk_used_mb,
+                        m.disk_free_mb,
+                        m.daemon_uptime_seconds,
+                        m.active_connections,
+                        m.total_rpc_calls,
+                        m.process_memory_mb,
+                    ),
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -370,13 +427,10 @@ class MetricsStore:
             finally:
                 conn.close()
 
-    def get_indexing_history(
-        self, rag_name: str | None = None, limit: int = 50
-    ) -> list[dict]:
+    def get_indexing_history(self, rag_name: str | None = None, limit: int = 50) -> list[dict]:
         if rag_name:
             return self._fetch_all(
-                "SELECT * FROM indexing_runs WHERE rag_name = ? "
-                "ORDER BY started_at DESC LIMIT ?",
+                "SELECT * FROM indexing_runs WHERE rag_name = ? ORDER BY started_at DESC LIMIT ?",
                 (rag_name, limit),
             )
         return self._fetch_all(
@@ -384,9 +438,7 @@ class MetricsStore:
             (limit,),
         )
 
-    def get_embedding_stats(
-        self, rag_name: str | None = None, limit: int = 100
-    ) -> list[dict]:
+    def get_embedding_stats(self, rag_name: str | None = None, limit: int = 100) -> list[dict]:
         if rag_name:
             return self._fetch_all(
                 "SELECT * FROM embedding_batches WHERE rag_name = ? "
@@ -398,13 +450,10 @@ class MetricsStore:
             (limit,),
         )
 
-    def get_search_stats(
-        self, rag_name: str | None = None, limit: int = 100
-    ) -> list[dict]:
+    def get_search_stats(self, rag_name: str | None = None, limit: int = 100) -> list[dict]:
         if rag_name:
             return self._fetch_all(
-                "SELECT * FROM search_queries WHERE rag_name = ? "
-                "ORDER BY timestamp DESC LIMIT ?",
+                "SELECT * FROM search_queries WHERE rag_name = ? ORDER BY timestamp DESC LIMIT ?",
                 (rag_name, limit),
             )
         return self._fetch_all(
@@ -412,9 +461,7 @@ class MetricsStore:
             (limit,),
         )
 
-    def get_vector_store_history(
-        self, rag_name: str | None = None, limit: int = 50
-    ) -> list[dict]:
+    def get_vector_store_history(self, rag_name: str | None = None, limit: int = 50) -> list[dict]:
         if rag_name:
             return self._fetch_all(
                 "SELECT * FROM vector_store_snapshots WHERE rag_name = ? "
@@ -439,8 +486,7 @@ class MetricsStore:
         # Last indexing run
         if rag_name:
             last_run = self._fetch_one(
-                "SELECT * FROM indexing_runs WHERE rag_name = ? "
-                "ORDER BY started_at DESC LIMIT 1",
+                "SELECT * FROM indexing_runs WHERE rag_name = ? ORDER BY started_at DESC LIMIT 1",
                 (rag_name,),
             )
         else:
@@ -520,8 +566,7 @@ class MetricsStore:
             )
         else:
             vs = self._fetch_one(
-                "SELECT * FROM vector_store_snapshots "
-                "ORDER BY timestamp DESC LIMIT 1",
+                "SELECT * FROM vector_store_snapshots ORDER BY timestamp DESC LIMIT 1",
             )
         summary["vector_store"] = vs
 
@@ -550,9 +595,7 @@ class MetricsStore:
             conn = self._connect()
             try:
                 for table, col in tables_cols:
-                    cur = conn.execute(
-                        f"DELETE FROM {table} WHERE {col} < ?", (cutoff,)
-                    )
+                    cur = conn.execute(f"DELETE FROM {table} WHERE {col} < ?", (cutoff,))
                     total += cur.rowcount
                 conn.commit()
             finally:
@@ -565,6 +608,7 @@ class MetricsStore:
 # ---------------------------------------------------------------------------
 # MetricsCollector — singleton facade used by instrumented code
 # ---------------------------------------------------------------------------
+
 
 class MetricsCollector:
     """Thread-safe singleton that instruments code writes to.
@@ -659,6 +703,7 @@ class MetricsCollector:
 # ---------------------------------------------------------------------------
 # System snapshot helper (uses psutil when available)
 # ---------------------------------------------------------------------------
+
 
 def capture_system_snapshot(
     daemon_uptime: float = 0.0,

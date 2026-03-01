@@ -7,7 +7,7 @@ import re
 import zipfile
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +78,6 @@ def _extract_odf_text(file_path: Path) -> str:
         from lxml import etree
 
         root = etree.fromstring(content_xml.encode("utf-8"))
-        ns = {
-            "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
-            "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
-        }
         paragraphs: list[str] = []
 
         # Extract text paragraphs and headings
@@ -94,9 +90,7 @@ def _extract_odf_text(file_path: Path) -> str:
                 paragraphs.append(text)
 
         # Extract table cells
-        for cell in root.iter(
-            "{urn:oasis:names:tc:opendocument:xmlns:table:1.0}table-cell"
-        ):
+        for cell in root.iter("{urn:oasis:names:tc:opendocument:xmlns:table:1.0}table-cell"):
             cell_text = "".join(cell.itertext()).strip()
             if cell_text:
                 paragraphs.append(cell_text)

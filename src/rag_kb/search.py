@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
+import time
 import warnings
 from typing import Any
 
@@ -15,49 +17,188 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# BM25 index cache — avoids reconstructing on every query
+# ---------------------------------------------------------------------------
+
+
+class BM25Index:
+    """Cached BM25 index that invalidates when the corpus changes.
+
+    Keyed by ``(rag_name, doc_count)`` — if the document count changes
+    the index is rebuilt.  A full `collection.count()` call is cheap.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._rag_name: str | None = None
+        self._doc_count: int = 0
+        self._bm25: Any = None
+        self._ids: list[str] = []
+        self._texts: list[str] = []
+        self._metas: list[dict[str, str]] = []
+        self._built_at: float = 0.0
+        # Maximum age in seconds before forcing a rebuild
+        self.max_age: float = 300.0  # 5 minutes
+
+    def _is_stale(self, rag_name: str, doc_count: int) -> bool:
+        """Check if the cached index needs rebuilding."""
+        if self._bm25 is None:
+            return True
+        if self._rag_name != rag_name:
+            return True
+        if self._doc_count != doc_count:
+            return True
+        return time.monotonic() - self._built_at > self.max_age
+
+    def get_or_build(
+        self,
+        rag_name: str,
+        doc_count: int,
+        fetch_fn,
+    ) -> tuple[Any, list[str], list[str], list[dict[str, str]]]:
+        """Return the BM25 model and corpus data, rebuilding if stale.
+
+        Parameters
+        ----------
+        rag_name : str
+            Active RAG name (cache key).
+        doc_count : int
+            Current collection document count (invalidation check).
+        fetch_fn : callable
+            ``() -> (ids, texts, metas)`` to load the full corpus.
+
+        Returns
+        -------
+        ``(bm25, ids, texts, metas)``
+        """
+        with self._lock:
+            if self._is_stale(rag_name, doc_count):
+                logger.debug(
+                    "BM25 index cache miss (rag=%s, count=%d→%d) — rebuilding",
+                    rag_name,
+                    self._doc_count,
+                    doc_count,
+                )
+                ids, texts, metas = fetch_fn()
+                self._build(rag_name, doc_count, ids, texts, metas)
+            # Return a snapshot so callers hold stable references
+            return self._bm25, self._ids, self._texts, self._metas
+
+    def _build(
+        self,
+        rag_name: str,
+        doc_count: int,
+        ids: list[str],
+        texts: list[str],
+        metas: list[dict[str, str]],
+    ) -> None:
+        from rank_bm25 import BM25Okapi
+
+        tokenized = [doc.lower().split() for doc in texts]
+        self._bm25 = BM25Okapi(tokenized) if tokenized else None
+        self._ids = ids
+        self._texts = texts
+        self._metas = metas
+        self._rag_name = rag_name
+        self._doc_count = doc_count
+        self._built_at = time.monotonic()
+        logger.debug("BM25 index built: %d documents", len(ids))
+
+    def invalidate(self) -> None:
+        """Force cache invalidation (e.g. after indexing)."""
+        with self._lock:
+            self._bm25 = None
+            self._rag_name = None
+            self._doc_count = 0
+
+
+# Global singleton
+_bm25_cache = BM25Index()
+
+
+def get_bm25_cache() -> BM25Index:
+    """Return the global BM25 index cache singleton."""
+    return _bm25_cache
+
+
 # ---------------------------------------------------------------------------
 # Lazy cross-encoder singleton
 # ---------------------------------------------------------------------------
 
 _reranker_cache: dict[str, Any] = {}
+_reranker_lock = threading.Lock()
+_MAX_RERANKER_CACHE_SIZE = 3
 
 
 def _get_reranker(model_name: str) -> Any:
-    """Load (or return cached) CrossEncoder model."""
-    if model_name not in _reranker_cache:
-        try:
-            from sentence_transformers import CrossEncoder
-        except ImportError as exc:
-            raise ImportError(
-                "sentence-transformers is required for re-ranking: "
-                "pip install sentence-transformers"
-            ) from exc
+    """Load (or return cached) CrossEncoder model.
 
-        # Prefer a bundled / pre-downloaded model directory
-        from rag_kb.models import get_model_path, get_model_spec
-        resolved = get_model_path(model_name)
+    Uses double-checked locking: fast path returns under lock,
+    heavy model loading happens outside the lock, then the result
+    is inserted under the lock (re-checking to handle the race
+    where another thread loaded the same model concurrently).
+    """
+    # Fast path — model already cached
+    with _reranker_lock:
+        if model_name in _reranker_cache:
+            return _reranker_cache[model_name]
 
-        # Respect trust_remote_code from the registry
-        spec = get_model_spec(model_name)
-        trust = spec.trust_remote_code if spec else False
+    # Slow path — load model outside lock to avoid blocking searches
+    try:
+        from sentence_transformers import CrossEncoder
+    except ImportError as exc:
+        raise ImportError(
+            "sentence-transformers is required for re-ranking: "
+            "pip install sentence-transformers"
+        ) from exc
 
-        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    from rag_kb.models import get_model_path, get_model_spec
 
-        from rag_kb.device import detect_device
-        device = detect_device()
+    resolved = get_model_path(model_name)
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            _reranker_cache[model_name] = CrossEncoder(
-                resolved, trust_remote_code=trust, device=device,
+    spec = get_model_spec(model_name)
+    trust = spec.trust_remote_code if spec else False
+
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+    from rag_kb.device import detect_device
+
+    device = detect_device()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model = CrossEncoder(
+            resolved,
+            trust_remote_code=trust,
+            device=device,
+        )
+
+    # Re-acquire lock for cache insertion (double-check)
+    with _reranker_lock:
+        if model_name in _reranker_cache:
+            # Another thread beat us — discard our copy, return theirs
+            return _reranker_cache[model_name]
+        # Evict oldest entry if cache is full
+        if len(_reranker_cache) >= _MAX_RERANKER_CACHE_SIZE:
+            oldest_key = next(iter(_reranker_cache))
+            logger.info(
+                "Evicting reranker '%s' from cache (max=%d)",
+                oldest_key,
+                _MAX_RERANKER_CACHE_SIZE,
             )
-        logger.info("Cross-encoder '%s' loaded (device=%s).", model_name, device)
-    return _reranker_cache[model_name]
+            del _reranker_cache[oldest_key]
+        _reranker_cache[model_name] = model
+
+    logger.info("Cross-encoder '%s' loaded (device=%s).", model_name, device)
+    return model
 
 
 # ---------------------------------------------------------------------------
 # Re-ranking
 # ---------------------------------------------------------------------------
+
 
 def rerank_cross_encoder(
     query: str,
@@ -97,6 +238,7 @@ def rerank_cross_encoder(
 # ---------------------------------------------------------------------------
 # Maximal Marginal Relevance (MMR)
 # ---------------------------------------------------------------------------
+
 
 def mmr_diversify(
     query_embedding: np.ndarray | list[float],
@@ -171,11 +313,14 @@ def mmr_diversify(
 # BM25 keyword search
 # ---------------------------------------------------------------------------
 
+
 def bm25_search(
     query: str,
     corpus_texts: list[str],
     doc_ids: list[str] | None = None,
     top_k: int = 20,
+    *,
+    bm25_index: Any | None = None,
 ) -> list[tuple[str, float]]:
     """Run BM25 keyword search over *corpus_texts*.
 
@@ -190,22 +335,27 @@ def bm25_search(
         otherwise the list index (as string) is returned.
     top_k : int
         Maximum number of results.
+    bm25_index : BM25Okapi | None
+        Pre-built BM25 index.  If provided, skips index construction.
 
     Returns a list of ``(doc_id, bm25_score)`` sorted by descending score.
     """
     if not corpus_texts or not query.strip():
         return []
 
-    try:
-        from rank_bm25 import BM25Okapi
-    except ImportError as exc:
-        raise ImportError("rank-bm25 is required for hybrid search: pip install rank-bm25") from exc
+    if bm25_index is None:
+        try:
+            from rank_bm25 import BM25Okapi
+        except ImportError as exc:
+            raise ImportError(
+                "rank-bm25 is required for hybrid search: pip install rank-bm25"
+            ) from exc
 
-    tokenized_corpus = [doc.lower().split() for doc in corpus_texts]
-    bm25 = BM25Okapi(tokenized_corpus)
+        tokenized_corpus = [doc.lower().split() for doc in corpus_texts]
+        bm25_index = BM25Okapi(tokenized_corpus)
 
     tokenized_query = query.lower().split()
-    scores = bm25.get_scores(tokenized_query)
+    scores = bm25_index.get_scores(tokenized_query)
 
     # Sort descending
     indexed = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
@@ -216,6 +366,7 @@ def bm25_search(
 # ---------------------------------------------------------------------------
 # Hybrid score fusion
 # ---------------------------------------------------------------------------
+
 
 def hybrid_fuse_scores(
     vector_scores: dict[str, float],

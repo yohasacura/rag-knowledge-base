@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # Lifespan — create and yield the DaemonClient
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[DaemonClient]:
     client = DaemonClient()
@@ -58,6 +59,7 @@ mcp = FastMCP(
 # Helper to get the API from request context
 # ---------------------------------------------------------------------------
 
+
 def _client(ctx) -> DaemonClient:
     """Extract the DaemonClient from the request context."""
     return ctx.request_context.lifespan_context
@@ -67,8 +69,11 @@ def _client(ctx) -> DaemonClient:
 # Tools
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
-def search_knowledge_base(query: str, n_results: int = 5, ctx: Context = None) -> list[dict[str, Any]]:
+def search_knowledge_base(
+    query: str, n_results: int = 5, ctx: Context = None
+) -> list[dict[str, Any]]:
     """Search the active RAG knowledge base with a natural language query.
 
     Uses hybrid search (vector + keyword), cross-encoder reranking, and MMR diversity
@@ -320,6 +325,7 @@ def delete_rag(name: str, confirm: bool = False, ctx: Context = None) -> dict[st
 # Model management tools
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 def list_models(
     model_type: str | None = None,
@@ -418,6 +424,7 @@ def get_vector_store_details(ctx: Context = None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Entry point helpers
 # ---------------------------------------------------------------------------
+
 
 def run_stdio() -> None:
     """Run the MCP server with stdio transport."""

@@ -6,7 +6,7 @@ import logging
 import re
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -24,9 +24,7 @@ class RtfParser:
         try:
             from striprtf.striprtf import rtf_to_text
         except ImportError as exc:
-            raise ImportError(
-                "striprtf is required for RTF parsing: pip install striprtf"
-            ) from exc
+            raise ImportError("striprtf is required for RTF parsing: pip install striprtf") from exc
 
         raw = file_path.read_text(encoding="utf-8", errors="replace")
 

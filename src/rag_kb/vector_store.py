@@ -5,12 +5,15 @@ Improvements:
   - Accepts numpy arrays for embeddings (avoids list conversion overhead).
   - ``get_all_documents()`` for BM25 keyword index construction.
   - Score threshold filtering in ``search()``.
-  - Larger default upsert batch (10 000).
+  - Safe upsert batch size (5 000, below ChromaDB's internal limit).
+  - ``VectorStoreRegistry`` for clean lifecycle management (no GC graph walking).
 """
 
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,6 +21,84 @@ from typing import Any
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Vector Store Registry — cleanly track open stores by path
+# ---------------------------------------------------------------------------
+
+
+class VectorStoreRegistry:
+    """Thread-safe registry of open VectorStore instances keyed by db_path.
+
+    Replaces the fragile ``gc.get_objects()`` approach for finding and
+    closing ChromaDB clients before deleting their data directories.
+    """
+
+    def __init__(self) -> None:
+        self._stores: dict[str, VectorStore] = {}
+        self._lock = threading.Lock()
+
+    def register(self, store: VectorStore) -> None:
+        """Track an open VectorStore."""
+        import os
+
+        key = os.path.normcase(os.path.normpath(store._db_path))
+        with self._lock:
+            self._stores[key] = store
+
+    def unregister(self, db_path: str) -> None:
+        """Remove a VectorStore from tracking."""
+        import os
+
+        key = os.path.normcase(os.path.normpath(db_path))
+        with self._lock:
+            self._stores.pop(key, None)
+
+    def close_for_path(self, db_path: str) -> None:
+        """Close and unregister the VectorStore at *db_path* (if any).
+
+        Uses ``force=True`` to release Rust bindings and memory-mapped files.
+        """
+        import os
+
+        key = os.path.normcase(os.path.normpath(db_path))
+        with self._lock:
+            store = self._stores.pop(key, None)
+        if store is not None:
+            try:
+                store.close(force=True)
+                logger.debug("VectorStoreRegistry: closed store at %s", db_path)
+            except Exception as exc:
+                logger.debug("VectorStoreRegistry: error closing store: %s", exc)
+
+    def close_all(self) -> None:
+        """Close all tracked stores."""
+        with self._lock:
+            stores = list(self._stores.values())
+            self._stores.clear()
+        for store in stores:
+            try:
+                store.close(force=True)
+            except Exception:
+                pass
+
+    def get(self, db_path: str) -> VectorStore | None:
+        """Return the tracked store for *db_path*, or None."""
+        import os
+
+        key = os.path.normcase(os.path.normpath(db_path))
+        with self._lock:
+            return self._stores.get(key)
+
+
+# Global singleton registry
+_store_registry = VectorStoreRegistry()
+
+
+def get_store_registry() -> VectorStoreRegistry:
+    """Return the global VectorStore registry."""
+    return _store_registry
 
 
 @dataclass
@@ -80,7 +161,7 @@ class _NoOpEmbeddingFunction:
         return {}
 
     @staticmethod
-    def build_from_config(config: dict) -> "_NoOpEmbeddingFunction":
+    def build_from_config(config: dict) -> _NoOpEmbeddingFunction:
         return _NoOpEmbeddingFunction()
 
     @staticmethod
@@ -117,6 +198,10 @@ class VectorStore:
             raise ImportError("chromadb is required: pip install chromadb") from exc
 
         self._db_path = db_path
+        self._hnsw_ef_construction = hnsw_ef_construction
+        self._hnsw_m = hnsw_m
+        self._db_size_cache: tuple[float, int] | None = None
+        self._db_size_cache_lock = threading.Lock()
         Path(db_path).mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(
             path=db_path,
@@ -133,6 +218,8 @@ class VectorStore:
             },
         )
         logger.debug("VectorStore opened at %s (%d chunks)", db_path, self._collection.count())
+        # Register in the global registry for clean lifecycle management
+        _store_registry.register(self)
 
     def close(self, *, force: bool = False) -> None:
         """Release the ChromaDB client references.
@@ -145,6 +232,10 @@ class VectorStore:
             memory-mapped HNSW files, and clear the singleton cache so the
             path can be safely deleted on Windows.
         """
+        # Unregister from the global registry
+        if self._db_path:
+            _store_registry.unregister(self._db_path)
+
         if force and self._client is not None:
             try:
                 # Delete the Rust bindings first — this releases the native
@@ -158,19 +249,19 @@ class VectorStore:
                 if system is not None:
                     try:
                         system.stop()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
                 # Clear the singleton cache so the stopped system is not
                 # reused and the path can be opened fresh later.
                 if hasattr(self._client, "clear_system_cache"):
                     self._client.clear_system_cache()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.debug("Ignoring error while stopping ChromaDB system", exc_info=True)
         self._collection = None  # type: ignore[assignment]
-        self._client = None      # type: ignore[assignment]
+        self._client = None  # type: ignore[assignment]
 
-    def __enter__(self) -> "VectorStore":
+    def __enter__(self) -> VectorStore:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -226,7 +317,9 @@ class VectorStore:
         # Python float objects for large batches.
         emb: list[list[float]] | np.ndarray = embeddings
 
-        batch = 10_000
+        # ChromaDB enforces a server-side max batch size (5 461 as of v0.6).
+        # Stay safely under it to avoid InternalError on upsert.
+        batch = 5_000
         for i in range(0, len(ids), batch):
             self._collection.upsert(
                 ids=ids[i : i + batch],
@@ -280,8 +373,9 @@ class VectorStore:
                 # Fallback: delete one by one
                 for src in sub:
                     total_deleted += self.delete_by_source(src)
-        logger.debug("Batch-deleted %d chunks for %d source files",
-                     total_deleted, len(source_files))
+        logger.debug(
+            "Batch-deleted %d chunks for %d source files", total_deleted, len(source_files)
+        )
         return total_deleted
 
     def get_embeddings_by_ids(self, ids: list[str]) -> dict[str, list[float]]:
@@ -293,23 +387,62 @@ class VectorStore:
             return {}
         results = self._collection.get(ids=ids, include=["embeddings"])
         out: dict[str, list[float]] = {}
-        if len(results.get("ids") or []) > 0 and results.get("embeddings") is not None and len(results["embeddings"]) > 0:
-            for doc_id, emb in zip(results["ids"], results["embeddings"]):
-                if emb is not None:
-                    out[doc_id] = emb
+        if (
+            len(results.get("ids") or []) > 0
+            and results.get("embeddings") is not None
+            and len(results["embeddings"]) > 0
+        ):
+            out = {
+                doc_id: emb
+                for doc_id, emb in zip(results["ids"], results["embeddings"], strict=False)
+                if emb is not None
+            }
         return out
 
     def clear(self) -> None:
-        """Remove all documents."""
+        """Remove all documents, preserving HNSW configuration."""
         self._client.delete_collection(self.COLLECTION_NAME)
         self._collection = self._client.get_or_create_collection(
             name=self.COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"},
+            metadata={
+                "hnsw:space": "cosine",
+                "hnsw:construction_ef": self._hnsw_ef_construction,
+                "hnsw:M": self._hnsw_m,
+            },
         )
 
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
+
+    # Maximum rows per ChromaDB ``get()`` call.  SQLite's default
+    # ``SQLITE_MAX_VARIABLE_NUMBER`` is 999 (or 32 766 on newer builds);
+    # ChromaDB maps each requested row to multiple SQL variables, so
+    # fetching >~5 000 rows in one shot triggers "too many SQL variables".
+    _GET_PAGE_SIZE = 4_000
+
+    def _iter_metadatas(self) -> list[dict]:
+        """Fetch **all** metadatas using paginated ``get()`` calls.
+
+        Avoids the *"too many SQL variables"* error that ChromaDB raises
+        when the collection contains more rows than SQLite can bind in a
+        single query.
+        """
+        all_metas: list[dict] = []
+        offset = 0
+        page = self._GET_PAGE_SIZE
+        while True:
+            batch = self._collection.get(
+                include=["metadatas"], limit=page, offset=offset,
+            )
+            metas = batch.get("metadatas") or []
+            if not metas:
+                break
+            all_metas.extend(metas)
+            if len(metas) < page:
+                break
+            offset += page
+        return all_metas
 
     def search(
         self,
@@ -346,14 +479,16 @@ class VectorStore:
 
         embeddings_list = results.get("embeddings", [[]])[0] if include_embeddings else []
 
-        for idx, doc_id in enumerate(results["ids"][0]):
+        for idx, _doc_id in enumerate(results["ids"][0]):
             meta = (results["metadatas"][0][idx] if results["metadatas"] else {}) or {}
             dist = results["distances"][0][idx] if results["distances"] else 0.0
             similarity = round(1.0 - dist, 4)  # cosine distance → similarity
             if similarity < min_score:
                 continue
             text = results["documents"][0][idx] if results["documents"] else ""
-            emb = embeddings_list[idx] if include_embeddings and idx < len(embeddings_list) else None
+            emb = (
+                embeddings_list[idx] if include_embeddings and idx < len(embeddings_list) else None
+            )
             hits.append(
                 SearchResult(
                     text=text,
@@ -376,11 +511,25 @@ class VectorStore:
         if total == 0:
             return [], [], []
 
-        results = self._collection.get(include=["documents", "metadatas"])
-        ids = results["ids"]
-        texts = results["documents"] or [""] * len(ids)
-        metas = results["metadatas"] or [{}] * len(ids)
-        return ids, texts, metas  # type: ignore[return-value]
+        all_ids: list[str] = []
+        all_texts: list[str] = []
+        all_metas: list[dict] = []
+        offset = 0
+        page = self._GET_PAGE_SIZE
+        while True:
+            results = self._collection.get(
+                include=["documents", "metadatas"], limit=page, offset=offset,
+            )
+            batch_ids = results.get("ids") or []
+            if not batch_ids:
+                break
+            all_ids.extend(batch_ids)
+            all_texts.extend(results.get("documents") or [""] * len(batch_ids))
+            all_metas.extend(results.get("metadatas") or [{}] * len(batch_ids))
+            if len(batch_ids) < page:
+                break
+            offset += page
+        return all_ids, all_texts, all_metas  # type: ignore[return-value]
 
     def get_by_source(self, source_file: str) -> list[dict[str, Any]]:
         """Return all chunks for a given source file."""
@@ -390,22 +539,28 @@ class VectorStore:
         )
         items: list[dict[str, Any]] = []
         for i, doc_id in enumerate(results["ids"]):
-            items.append({
-                "id": doc_id,
-                "text": results["documents"][i] if results["documents"] else "",
-                "metadata": results["metadatas"][i] if results["metadatas"] else {},
-            })
+            items.append(
+                {
+                    "id": doc_id,
+                    "text": results["documents"][i] if results["documents"] else "",
+                    "metadata": results["metadatas"][i] if results["metadatas"] else {},
+                }
+            )
         return sorted(items, key=lambda x: int(x.get("metadata", {}).get("chunk_index", 0)))
 
     def list_sources(self) -> list[str]:
         """Return distinct source file paths."""
-        results = self._collection.get(include=["metadatas"])
+        try:
+            all_metas = self._iter_metadatas()
+        except Exception:
+            # Collection may not exist after a failed full-reindex.
+            logger.debug("list_sources: collection unavailable", exc_info=True)
+            return []
         sources: set[str] = set()
-        if results["metadatas"]:
-            for meta in results["metadatas"]:
-                src = (meta or {}).get("source_file", "")
-                if src:
-                    sources.add(src)
+        for meta in all_metas:
+            src = (meta or {}).get("source_file", "")
+            if src:
+                sources.add(src)
         return sorted(sources)
 
     def list_files_with_counts(self) -> dict[str, int]:
@@ -414,19 +569,26 @@ class VectorStore:
         Only fetches metadata (no texts or embeddings), so this is
         significantly cheaper than ``get_all_documents()`` for large collections.
         """
-        results = self._collection.get(include=["metadatas"])
+        try:
+            all_metas = self._iter_metadatas()
+        except Exception:
+            # Collection may not exist after a failed full-reindex.
+            logger.debug("list_files_with_counts: collection unavailable", exc_info=True)
+            return {}
         counts: dict[str, int] = {}
-        if results["metadatas"]:
-            for meta in results["metadatas"]:
-                src = (meta or {}).get("source_file", "")
-                if src:
-                    counts[src] = counts.get(src, 0) + 1
+        for meta in all_metas:
+            src = (meta or {}).get("source_file", "")
+            if src:
+                counts[src] = counts.get(src, 0) + 1
         return counts
 
     def get_stats(self) -> StoreStats:
         """Return aggregate statistics."""
         sources = self.list_sources()
-        total_chunks = self._collection.count()
+        try:
+            total_chunks = self._collection.count()
+        except Exception:
+            total_chunks = 0
         total_files = len(sources)
         db_size = self._get_db_size()
         avg_cpf = round(total_chunks / total_files, 1) if total_files else 0.0
@@ -438,9 +600,65 @@ class VectorStore:
             avg_chunks_per_file=avg_cpf,
         )
 
+    def get_stats_summary(self) -> StoreStats:
+        """Return lightweight stats using only ``count()``.
+
+        Unlike :meth:`get_stats`, this does **not** fetch all metadatas
+        from the collection, making it safe to call while the store is
+        being written to (e.g. during indexing).
+        """
+        total_chunks = self._collection.count()
+        db_size = self._get_db_size()
+        return StoreStats(
+            total_chunks=total_chunks,
+            total_files=0,
+            files=[],
+            db_size_bytes=db_size,
+            avg_chunks_per_file=0.0,
+        )
+
+    def get_stats_fast(self) -> StoreStats:
+        """Return file and chunk counts without fetching full metadata.
+
+        Uses ``_count_distinct_sources()`` (fast ``FileManifest`` path)
+        instead of ``list_sources()`` which iterates all metadata rows.
+        Skips ``_get_db_size()`` (expensive ``rglob``) since callers
+        that only need counts don't need the on-disk size.
+
+        Ideal for the ``index.status`` polling path.
+        """
+        try:
+            total_chunks = self._collection.count()
+        except Exception:
+            total_chunks = 0
+        total_files = self._count_distinct_sources()
+        avg_cpf = round(total_chunks / total_files, 1) if total_files else 0.0
+        return StoreStats(
+            total_chunks=total_chunks,
+            total_files=total_files,
+            files=[],
+            db_size_bytes=0,
+            avg_chunks_per_file=avg_cpf,
+        )
+
     def get_detailed_stats(self) -> dict[str, Any]:
-        """Return extended stats including HNSW config and DB size."""
-        stats = self.get_stats()
+        """Return extended stats including HNSW config and DB size.
+
+        Uses a lightweight path: ``collection.count()`` + ``_get_db_size()``
+        + ``_count_distinct_sources()`` to avoid fetching the full file list
+        via ``_iter_metadatas()``, which is O(N) on collection size and can
+        take minutes for large knowledge bases.
+        """
+        total_chunks = 0
+        try:
+            total_chunks = self._collection.count()
+        except Exception:
+            pass
+
+        total_files = self._count_distinct_sources()
+        db_size = self._get_db_size()
+        avg_cpf = round(total_chunks / total_files, 1) if total_files else 0.0
+
         hnsw_config = {}
         try:
             meta = self._collection.metadata or {}
@@ -452,26 +670,86 @@ class VectorStore:
         except Exception:
             pass
         return {
-            "total_chunks": stats.total_chunks,
-            "total_files": stats.total_files,
-            "db_size_bytes": stats.db_size_bytes,
-            "db_size_mb": round(stats.db_size_bytes / (1024 * 1024), 2),
-            "avg_chunks_per_file": stats.avg_chunks_per_file,
+            "total_chunks": total_chunks,
+            "total_files": total_files,
+            "db_size_bytes": db_size,
+            "db_size_mb": round(db_size / (1024 * 1024), 2),
+            "avg_chunks_per_file": avg_cpf,
             "collection_name": self.COLLECTION_NAME,
             "db_path": self._db_path,
             "hnsw_config": hnsw_config,
         }
 
-    def _get_db_size(self) -> int:
-        """Return total size of the ChromaDB directory in bytes."""
+    def _count_distinct_sources(self) -> int:
+        """Count distinct source files without building the full file list.
+
+        Prefers the file manifest (a fast SQLite COUNT) when available.
+        Falls back to a paginated metadata scan if the manifest DB does
+        not exist (e.g. freshly imported RAGs).
+        """
+        # Fast path: file_manifest.db lives inside the ChromaDB directory
+        manifest_path = Path(self._db_path) / "file_manifest.db"
+        if manifest_path.exists():
+            try:
+                from rag_kb.file_manifest import FileManifest
+
+                fm = FileManifest(str(manifest_path))
+                count = fm.count()
+                fm.close()
+                return count
+            except Exception:
+                pass
+
+        # Slow fallback: paginated metadata scan (only source_file field)
         try:
-            return sum(
-                f.stat().st_size
-                for f in Path(self._db_path).rglob("*")
-                if f.is_file()
-            )
+            sources: set[str] = set()
+            offset = 0
+            page = self._GET_PAGE_SIZE
+            while True:
+                batch = self._collection.get(
+                    include=["metadatas"], limit=page, offset=offset,
+                )
+                metas = batch.get("metadatas") or []
+                if not metas:
+                    break
+                for m in metas:
+                    src = (m or {}).get("source_file", "")
+                    if src:
+                        sources.add(src)
+                if len(metas) < page:
+                    break
+                offset += page
+            return len(sources)
         except Exception:
             return 0
+
+    # Cached DB size to avoid repeated expensive rglob over large dirs.
+    _DB_SIZE_CACHE_TTL = 60  # seconds
+
+    def _get_db_size(self) -> int:
+        """Return total size of the ChromaDB directory in bytes.
+
+        Results are cached for ``_DB_SIZE_CACHE_TTL`` seconds to avoid
+        repeated expensive ``rglob`` walks on large databases.
+        """
+        now = time.monotonic()
+        with self._db_size_cache_lock:
+            if self._db_size_cache is not None:
+                ts, cached_size = self._db_size_cache
+                if now - ts < self._DB_SIZE_CACHE_TTL:
+                    return cached_size
+        try:
+            size = sum(f.stat().st_size for f in Path(self._db_path).rglob("*") if f.is_file())
+        except Exception:
+            size = 0
+        with self._db_size_cache_lock:
+            self._db_size_cache = (now, size)
+        return size
+
+    def invalidate_db_size_cache(self) -> None:
+        """Reset the cached DB size so the next call recalculates."""
+        with self._db_size_cache_lock:
+            self._db_size_cache = None
 
     def count(self) -> int:
         return self._collection.count()

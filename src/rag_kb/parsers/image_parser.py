@@ -23,23 +23,32 @@ later for describing diagrams, screenshots, and other non-text images.
 from __future__ import annotations
 
 import logging
-import re
 from abc import abstractmethod
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
 
 # ── Supported image extensions ──────────────────────────────────────────
 
 _IMAGE_EXTENSIONS: list[str] = [
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif",
-    ".webp", ".ico", ".heic", ".heif",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".tif",
+    ".webp",
+    ".ico",
+    ".heic",
+    ".heif",
 ]
 
 # ── Vision-model captioning hook ────────────────────────────────────────
+
 
 @runtime_checkable
 class ImageCaptioner(Protocol):
@@ -67,17 +76,20 @@ class ImageCaptioner(Protocol):
 # The default `pip install` pulls in rapidocr so OCR works
 # out of the box with zero system dependencies.
 
-import platform as _platform
-import shutil as _shutil
+import platform as _platform  # noqa: E402
+import shutil as _shutil  # noqa: E402
 
 # Well-known Tesseract install locations per platform
 _TESSERACT_PATHS: list[str] = []
 if _platform.system() == "Windows":
     import os as _os
+
     _TESSERACT_PATHS = [
         r"C:\Program Files\Tesseract-OCR\tesseract.exe",
         r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-        _os.path.join(_os.environ.get("LOCALAPPDATA", ""), "Programs", "Tesseract-OCR", "tesseract.exe"),
+        _os.path.join(
+            _os.environ.get("LOCALAPPDATA", ""), "Programs", "Tesseract-OCR", "tesseract.exe"
+        ),
     ]
 elif _platform.system() == "Darwin":
     _TESSERACT_PATHS = ["/usr/local/bin/tesseract", "/opt/homebrew/bin/tesseract"]
@@ -105,7 +117,7 @@ def _configure_tesseract(pytesseract_module) -> None:
 
 
 # Cache heavy OCR engine instances — protected by locks for thread-safety
-import threading as _threading
+import threading as _threading  # noqa: E402
 
 _surya_lock = _threading.Lock()
 _surya_rec_predictor = None
@@ -126,16 +138,17 @@ def _get_surya_predictors():
 
     Returns ``(recognition_predictor, detection_predictor)``.
     """
-    global _surya_rec_predictor, _surya_det_predictor, _surya_disabled
+    global _surya_rec_predictor, _surya_det_predictor
     if _surya_disabled:
         raise RuntimeError("Surya OCR disabled after CUDA error")
     with _surya_lock:
         if _surya_disabled:
             raise RuntimeError("Surya OCR disabled after CUDA error")
         if _surya_rec_predictor is None:
+            from surya.detection import DetectionPredictor
             from surya.foundation import FoundationPredictor
             from surya.recognition import RecognitionPredictor
-            from surya.detection import DetectionPredictor
+
             from rag_kb.device import detect_device
 
             device = detect_device()
@@ -184,7 +197,8 @@ def _get_rapidocr_engine():
     """
     global _rapidocr_engine
     if _rapidocr_engine is None:
-        from rapidocr import RapidOCR, LangRec, OCRVersion
+        from rapidocr import LangRec, OCRVersion, RapidOCR
+
         from rag_kb.device import onnxruntime_has_cuda
 
         params: dict = {
@@ -194,8 +208,11 @@ def _get_rapidocr_engine():
 
         # If onnxruntime-gpu is installed, prefer CUDA with CPU fallback.
         if onnxruntime_has_cuda():
-            for key in ("Det.onnxruntime.providers", "Cls.onnxruntime.providers",
-                        "Rec.onnxruntime.providers"):
+            for key in (
+                "Det.onnxruntime.providers",
+                "Cls.onnxruntime.providers",
+                "Rec.onnxruntime.providers",
+            ):
                 params[key] = ["CUDAExecutionProvider", "CPUExecutionProvider"]
             logger.info("RapidOCR will use ONNX Runtime with CUDA provider.")
         else:
@@ -213,6 +230,7 @@ def _get_easyocr_reader():
     global _easyocr_reader
     if _easyocr_reader is None:
         import easyocr
+
         from rag_kb.device import is_cuda_available
 
         use_gpu = is_cuda_available()
@@ -231,7 +249,9 @@ def _ocr_extract(image_path: Path) -> tuple[str, str]:
     """
     try:
         from PIL import Image as _PILImage
-        img = _PILImage.open(image_path).convert("RGB")
+
+        with _PILImage.open(image_path) as raw_img:
+            img = raw_img.convert("RGB")
     except Exception as exc:
         logger.debug("Cannot open image %s: %s", image_path, exc)
         return "", "none"
@@ -245,7 +265,7 @@ def _is_cuda_error(exc: Exception) -> bool:
 
 
 def ocr_image(
-    image: "PIL.Image.Image",  # noqa: F821 — forward ref to avoid top-level import
+    image: PIL.Image.Image,  # noqa: F821 — forward ref to avoid top-level import
     *,
     label: str = "<embedded image>",
 ) -> tuple[str, str]:
@@ -309,6 +329,7 @@ def ocr_image(
     # --- 3. pytesseract (accepts PIL Image directly) --------------------
     try:
         import pytesseract
+
         _configure_tesseract(pytesseract)
         text = pytesseract.image_to_string(image)
         return text.strip(), "tesseract"
@@ -335,7 +356,7 @@ def ocr_image(
 
 
 def ocr_images_batch(
-    images: list["PIL.Image.Image"],  # noqa: F821
+    images: list[PIL.Image.Image],  # noqa: F821
     *,
     labels: list[str] | None = None,
 ) -> list[tuple[str, str]]:
@@ -377,13 +398,11 @@ def ocr_images_batch(
                 logger.debug("Surya batch OCR failed: %s", exc)
 
     # --- Fallback: per-image with non-Surya engines ---------------------
-    return [
-        ocr_image(img, label=lbl)
-        for img, lbl in zip(rgb_images, labels)
-    ]
+    return [ocr_image(img, label=lbl) for img, lbl in zip(rgb_images, labels, strict=False)]
 
 
 # ── Metadata extraction ────────────────────────────────────────────────
+
 
 def _extract_metadata(image_path: Path) -> dict[str, str]:
     """Extract image metadata using Pillow."""
@@ -403,9 +422,16 @@ def _extract_metadata(image_path: Path) -> dict[str, str]:
             exif_data = img.getexif()
             if exif_data:
                 interesting_tags = {
-                    "Make", "Model", "DateTime", "DateTimeOriginal",
-                    "Software", "ImageDescription", "Artist",
-                    "Copyright", "ExifImageWidth", "ExifImageHeight",
+                    "Make",
+                    "Model",
+                    "DateTime",
+                    "DateTimeOriginal",
+                    "Software",
+                    "ImageDescription",
+                    "Artist",
+                    "Copyright",
+                    "ExifImageWidth",
+                    "ExifImageHeight",
                 }
                 for tag_id, value in exif_data.items():
                     tag_name = TAGS.get(tag_id, str(tag_id))
@@ -421,6 +447,7 @@ def _extract_metadata(image_path: Path) -> dict[str, str]:
 
 
 # ── Main parser ─────────────────────────────────────────────────────────
+
 
 class ImageParser:
     """Parse image files — metadata + OCR text + optional vision-model caption.

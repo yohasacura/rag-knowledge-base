@@ -15,14 +15,13 @@ from __future__ import annotations
 
 import logging
 import os
-import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from rag_kb.config import DATA_DIR
 from rag_kb.rpc_protocol import (
@@ -31,12 +30,14 @@ from rag_kb.rpc_protocol import (
     RpcError,
     frame_message,
     make_request,
+    read_auth_token,
     read_frame_sync,
 )
 
 logger = logging.getLogger(__name__)
 
 _PID_FILE = DATA_DIR / "daemon.pid"
+_SPAWN_LOCK_FILE = DATA_DIR / "daemon_spawn.lock"
 
 
 class DaemonClient:
@@ -65,12 +66,13 @@ class DaemonClient:
         self._port = port
         self._sock: socket.socket | None = None
         self._lock = threading.Lock()
+        self._auth_token: str | None = None
 
     # ------------------------------------------------------------------
     # Context manager
     # ------------------------------------------------------------------
 
-    def __enter__(self) -> "DaemonClient":
+    def __enter__(self) -> DaemonClient:
         self.ensure_daemon()
         self.connect()
         return self
@@ -86,6 +88,8 @@ class DaemonClient:
         """Open a TCP connection to the daemon."""
         if self._sock is not None:
             return
+        # Read auth token from disk (written by the daemon on startup)
+        self._auth_token = read_auth_token()
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(120)  # generous timeout for long-running ops
         sock.connect((self._host, self._port))
@@ -118,24 +122,45 @@ class DaemonClient:
 
         1. Check PID file → is process alive?
         2. TCP probe → can we connect?
-        3. If not, spawn daemon subprocess and poll until ready.
+        3. If alive but not responding, kill the stale process.
+        4. Spawn daemon subprocess and poll until ready.
+
+        Uses a file lock to prevent two CLI processes from spawning
+        duplicate daemon instances simultaneously (WS6).
         """
         if self._probe():
             return
 
-        # Check PID file and whether that process is alive
-        if _is_daemon_alive():
-            # Process exists but port not open yet — wait a bit
-            if self._wait_for_daemon(timeout=5):
+        # Check PID file and whether that process is alive.
+        # If alive and port opens shortly, we're good.
+        if _is_daemon_alive() and self._wait_for_daemon(timeout=5):
+            return
+
+        # Cross-process lock: only one spawner at a time
+        _SPAWN_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_fh = open(_SPAWN_LOCK_FILE, "w", encoding="utf-8")  # noqa: SIM115
+        try:
+            _lock_file(lock_fh)
+
+            # Re-check after acquiring the lock — another process may have
+            # already started the daemon while we were waiting.
+            if self._probe():
                 return
 
-        # Spawn a new daemon
-        self._spawn_daemon()
-        if not self._wait_for_daemon(timeout=10):
-            raise RuntimeError(
-                f"Daemon failed to start on {self._host}:{self._port} — "
-                f"check logs or start manually with: rag-kb-daemon"
-            )
+            # Kill stale daemon that's alive but not responding
+            if _is_daemon_alive():
+                kill_stale_daemon(graceful_timeout=3.0)
+
+            # Spawn a new daemon
+            self._spawn_daemon()
+            if not self._wait_for_daemon(timeout=10):
+                raise RuntimeError(
+                    f"Daemon failed to start on {self._host}:{self._port} — "
+                    f"check logs or start manually with: rag-kb-daemon"
+                )
+        finally:
+            _unlock_file(lock_fh)
+            lock_fh.close()
 
     def _probe(self) -> bool:
         """Return True if the daemon is reachable via TCP."""
@@ -149,11 +174,15 @@ class DaemonClient:
             return False
 
     def _wait_for_daemon(self, timeout: float = 10) -> bool:
-        """Poll TCP port with exponential back-off until reachable."""
+        """Poll TCP port with exponential back-off until reachable.
+
+        Also verifies that the auth token file has been written, so
+        the client can authenticate on its first connection.
+        """
         deadline = time.monotonic() + timeout
         delay = 0.1
         while time.monotonic() < deadline:
-            if self._probe():
+            if self._probe() and read_auth_token() is not None:
                 return True
             time.sleep(delay)
             delay = min(delay * 1.5, 1.0)
@@ -166,17 +195,22 @@ class DaemonClient:
         # Ensure log directory exists so the daemon can write its log file
         # even before its own logging setup runs.
         from rag_kb.daemon import LOG_FILE
+
         LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
         cmd = [
-            sys.executable, "-m", "rag_kb.daemon",
-            "--host", self._host,
-            "--port", str(self._port),
+            sys.executable,
+            "-m",
+            "rag_kb.daemon",
+            "--host",
+            self._host,
+            "--port",
+            str(self._port),
         ]
 
         # Redirect stdout/stderr to the daemon log file so that early
         # startup messages (or crash tracebacks) are captured.
-        log_fh = open(LOG_FILE, "a", encoding="utf-8")
+        log_fh = open(LOG_FILE, "a", encoding="utf-8")  # noqa: SIM115
 
         kwargs: dict[str, Any] = {
             "stdout": log_fh,
@@ -215,6 +249,9 @@ class DaemonClient:
             assert self._sock is not None
 
             req = make_request(method, params)
+            # Inject auth token for daemon validation
+            if self._auth_token:
+                req["_auth_token"] = self._auth_token
             self._sock.sendall(frame_message(req))
 
             saved_timeout = self._sock.gettimeout()
@@ -264,12 +301,15 @@ class DaemonClient:
         embedding_model: str | None = None,
     ) -> dict:
         """Create a new RAG."""
-        return self._call("rag.create", {
-            "name": name,
-            "folders": folders,
-            "description": description,
-            "embedding_model": embedding_model,
-        })
+        return self._call(
+            "rag.create",
+            {
+                "name": name,
+                "folders": folders,
+                "description": description,
+                "embedding_model": embedding_model,
+            },
+        )
 
     def switch_rag(self, name: str) -> dict:
         """Set *name* as the active RAG."""
@@ -298,11 +338,7 @@ class DaemonClient:
 
     def get_active_name(self) -> str | None:
         """Return the name of the active RAG, or None."""
-        rags = self.list_rags()
-        for r in rags:
-            if r.get("is_active"):
-                return r["name"]
-        return None
+        return self._call("rag.active_name", {})
 
     # --- search.* ---
 
@@ -336,8 +372,9 @@ class DaemonClient:
             params["rag_name"] = rag_name
         if workers is not None:
             params["workers"] = workers
-        return self._call("index.run", params, on_progress=on_progress,
-                          timeout=3600)  # 1 hour — indexing can be very long
+        return self._call(
+            "index.run", params, on_progress=on_progress, timeout=3600
+        )  # 1 hour — indexing can be very long
 
     def get_index_status(self, rag_name: str | None = None) -> dict:
         """Return structured status for a RAG."""
@@ -378,8 +415,9 @@ class DaemonClient:
         params: dict[str, Any] = {}
         if rag_name:
             params["rag_name"] = rag_name
-        return self._call("index.reindex", params, on_progress=on_progress,
-                          timeout=3600)  # 1 hour — indexing can be very long
+        return self._call(
+            "index.reindex", params, on_progress=on_progress, timeout=3600
+        )  # 1 hour — indexing can be very long
 
     def get_document_content(
         self,
@@ -613,6 +651,7 @@ def _is_daemon_alive() -> bool:
             # On Windows, os.kill(pid, 0) doesn't work reliably.
             # Use ctypes to check if the process exists.
             import ctypes
+
             kernel32 = ctypes.windll.kernel32
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
             handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
@@ -625,3 +664,128 @@ def _is_daemon_alive() -> bool:
             return True
     except (OSError, ProcessLookupError):
         return False
+
+
+def _read_pid() -> int | None:
+    """Read the PID from the PID file, or return None."""
+    if not _PID_FILE.exists():
+        return None
+    try:
+        return int(_PID_FILE.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
+
+
+def _kill_process(pid: int, *, timeout: float = 5.0) -> bool:
+    """Kill a process by PID and wait for it to exit.
+
+    Sends SIGTERM first, then SIGKILL (Unix) / TerminateProcess (Windows)
+    if the process doesn't exit within *timeout* seconds.
+    Returns True if the process is no longer running.
+    """
+    import signal as _signal
+
+    try:
+        if sys.platform == "win32":
+            os.kill(pid, _signal.SIGTERM)
+        else:
+            os.kill(pid, _signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        return True  # already dead
+
+    # Wait for graceful exit
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if sys.platform == "win32":
+                import ctypes
+
+                kernel32 = ctypes.windll.kernel32
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+                if handle:
+                    kernel32.CloseHandle(handle)
+                    time.sleep(0.2)
+                    continue
+                return True
+            else:
+                os.kill(pid, 0)
+                time.sleep(0.2)
+        except (OSError, ProcessLookupError):
+            return True
+
+    # Force kill
+    try:
+        if sys.platform == "win32":
+            os.kill(pid, _signal.SIGTERM)  # Windows os.kill sends TerminateProcess
+        else:
+            os.kill(pid, _signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+
+    # Final wait
+    time.sleep(0.5)
+    return not _is_daemon_alive()
+
+
+def kill_stale_daemon(*, graceful_timeout: float = 3.0) -> bool:
+    """Kill a stale daemon that is alive but not responding on TCP.
+
+    Returns True if a stale daemon was found and killed (or wasn't
+    running at all).  Returns False if the kill attempt failed.
+    """
+    pid = _read_pid()
+    if pid is None:
+        return True  # no PID file — nothing to kill
+
+    if pid == os.getpid():
+        return True  # don't kill ourselves
+
+    if not _is_daemon_alive():
+        # Process is dead but PID file is stale — clean it up
+        try:
+            _PID_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return True
+
+    logger.warning(
+        "Stale daemon detected (PID %d, not responding). Killing …", pid
+    )
+    killed = _kill_process(pid, timeout=graceful_timeout)
+    if killed:
+        logger.info("Stale daemon (PID %d) killed.", pid)
+        try:
+            _PID_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+    else:
+        logger.error("Failed to kill stale daemon (PID %d).", pid)
+    return killed
+
+
+def _lock_file(fh) -> None:
+    """Acquire an exclusive file lock (cross-platform)."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(fh, fcntl.LOCK_EX)
+
+
+def _unlock_file(fh) -> None:
+    """Release a file lock (cross-platform)."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        try:
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+    else:
+        import fcntl
+
+        fcntl.flock(fh, fcntl.LOCK_UN)

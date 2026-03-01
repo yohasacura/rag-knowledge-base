@@ -1,68 +1,97 @@
-"""Parser registry — maps file extensions to parser implementations."""
+"""Parser registry — maps file extensions to parser implementations.
+
+Parsers are registered lazily: only the extension→module mapping is built
+at import time.  The actual parser class is imported and instantiated on
+first use, avoiding heavy dependency imports (pypdf, python-docx, etc.)
+until a file of that type is actually encountered.
+"""
 
 from __future__ import annotations
 
+import importlib
+import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from rag_kb.parsers.base import DocumentParser, ParsedDocument
-from rag_kb.parsers.markdown_parser import MarkdownParser
-from rag_kb.parsers.txt_parser import TxtParser
-from rag_kb.parsers.pdf_parser import PdfParser
-from rag_kb.parsers.docx_parser import DocxParser
-from rag_kb.parsers.pptx_parser import PptxParser
-from rag_kb.parsers.html_parser import HtmlParser
-from rag_kb.parsers.xlsx_parser import XlsxParser
-from rag_kb.parsers.csv_parser import CsvParser
-from rag_kb.parsers.json_parser import JsonParser
-from rag_kb.parsers.yaml_parser import YamlParser
-from rag_kb.parsers.xml_parser import XmlParser
-from rag_kb.parsers.rst_parser import RstParser
-from rag_kb.parsers.rtf_parser import RtfParser
-from rag_kb.parsers.odf_parser import OdtParser, OdsParser, OdpParser
-from rag_kb.parsers.epub_parser import EpubParser
-from rag_kb.parsers.code_parser import CodeParser
-from rag_kb.parsers.log_parser import LogParser
-from rag_kb.parsers.image_parser import ImageParser
 
-# Instantiate parsers once — order matters: more specific parsers first,
-# TxtParser last as a catch-all for remaining plain text formats.
-_PARSERS: list[DocumentParser] = [
-    MarkdownParser(),
-    PdfParser(),
-    DocxParser(),
-    PptxParser(),
-    XlsxParser(),
-    HtmlParser(),
-    CsvParser(),
-    JsonParser(),
-    YamlParser(),
-    XmlParser(),
-    RstParser(),
-    RtfParser(),
-    OdtParser(),
-    OdsParser(),
-    OdpParser(),
-    EpubParser(),
-    ImageParser(),
-    CodeParser(),
-    LogParser(),
-    TxtParser(),
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Lazy parser registry
+# ---------------------------------------------------------------------------
+
+# Extension → (module_path, class_name) mapping.
+# Parser classes are only instantiated on first use.
+_PARSER_SPECS: list[tuple[str, str]] = [
+    ("rag_kb.parsers.markdown_parser", "MarkdownParser"),
+    ("rag_kb.parsers.pdf_parser", "PdfParser"),
+    ("rag_kb.parsers.docx_parser", "DocxParser"),
+    ("rag_kb.parsers.pptx_parser", "PptxParser"),
+    ("rag_kb.parsers.xlsx_parser", "XlsxParser"),
+    ("rag_kb.parsers.html_parser", "HtmlParser"),
+    ("rag_kb.parsers.csv_parser", "CsvParser"),
+    ("rag_kb.parsers.json_parser", "JsonParser"),
+    ("rag_kb.parsers.yaml_parser", "YamlParser"),
+    ("rag_kb.parsers.xml_parser", "XmlParser"),
+    ("rag_kb.parsers.rst_parser", "RstParser"),
+    ("rag_kb.parsers.rtf_parser", "RtfParser"),
+    ("rag_kb.parsers.odf_parser", "OdtParser"),
+    ("rag_kb.parsers.odf_parser", "OdsParser"),
+    ("rag_kb.parsers.odf_parser", "OdpParser"),
+    ("rag_kb.parsers.epub_parser", "EpubParser"),
+    ("rag_kb.parsers.image_parser", "ImageParser"),
+    ("rag_kb.parsers.code_parser", "CodeParser"),
+    ("rag_kb.parsers.log_parser", "LogParser"),
+    ("rag_kb.parsers.txt_parser", "TxtParser"),
 ]
 
-# Build extension → parser lookup
-_EXT_MAP: dict[str, DocumentParser] = {}
-for _parser in _PARSERS:
-    for _ext in _parser.supported_extensions:
-        _EXT_MAP[_ext.lower()] = _parser
+# Extension → (module_path, class_name) lookup — built eagerly from
+# the parser classes' supported_extensions without importing them.
+# We import each module *once* just to read extensions, but the heavy
+# dependencies (pypdf, etc.) are deferred to the parse() call.
+_EXT_MAP: dict[str, tuple[str, str]] = {}
+_PARSER_CACHE: dict[str, DocumentParser] = {}  # class_name → instance
+
+
+def _build_ext_map() -> None:
+    """Build the extension → parser spec mapping.
+
+    Imports each parser module to read its ``supported_extensions`` class
+    attribute.  This is done once at first access.
+    """
+    for module_path, class_name in _PARSER_SPECS:
+        try:
+            mod = importlib.import_module(module_path)
+            cls = getattr(mod, class_name)
+            for ext in cls.supported_extensions:
+                _EXT_MAP[ext.lower()] = (module_path, class_name)
+        except Exception as exc:
+            logger.debug("Could not load parser %s.%s: %s", module_path, class_name, exc)
+
+
+_build_ext_map()
 
 SUPPORTED_EXTENSIONS: list[str] = sorted(_EXT_MAP.keys())
+
+
+def _get_parser_instance(module_path: str, class_name: str) -> DocumentParser:
+    """Lazily instantiate a parser, caching by class name."""
+    if class_name not in _PARSER_CACHE:
+        mod = importlib.import_module(module_path)
+        cls = getattr(mod, class_name)
+        _PARSER_CACHE[class_name] = cls()
+    return _PARSER_CACHE[class_name]
 
 
 def get_parser(file_path: Path) -> DocumentParser | None:
     """Return the appropriate parser for a file, or None if unsupported."""
     ext = file_path.suffix.lower()
-    return _EXT_MAP.get(ext)
+    spec = _EXT_MAP.get(ext)
+    if spec is None:
+        return None
+    module_path, class_name = spec
+    return _get_parser_instance(module_path, class_name)
 
 
 def parse_file(file_path: Path) -> ParsedDocument | None:

@@ -28,219 +28,192 @@ Two public helpers are exposed:
 
 from __future__ import annotations
 
-import os
-from pathlib import PurePosixPath
-
 # ── directories to skip (matched against the directory *name*, case-insensitive) ──
 
-SKIP_DIRS: frozenset[str] = frozenset({
-    # Version control
-    ".git",
-    ".hg",
-    ".svn",
-    ".bzr",
-    "_darcs",
-    ".fossil",
-
-    # Python
-    "__pycache__",
-    ".mypy_cache",
-    ".ruff_cache",
-    ".pytest_cache",
-    ".tox",
-    ".nox",
-    ".eggs",
-    ".ipynb_checkpoints",
-    "site-packages",
-
-    # Virtual environments
-    "venv",
-    ".venv",
-    "env",
-    ".env",
-    ".virtualenvs",
-    "__pypackages__",
-    ".pixi",
-    ".conda",
-
-    # Node / JS / TS
-    "node_modules",
-    ".npm",
-    ".yarn",
-    ".pnpm-store",
-    "bower_components",
-    ".next",
-    ".nuxt",
-    ".svelte-kit",
-    ".parcel-cache",
-    ".turbo",
-
-    # Build / distribution outputs
-    "dist",
-    "build",
-    "out",
-    "target",
-    "bin",
-    "obj",
-    "_build",
-    "cmake-build-debug",
-    "cmake-build-release",
-
-    # Rust
-    # (target/ already listed above)
-
-    # Go
-    "vendor",          # also PHP Composer
-
-    # Java / Gradle / Maven
-    ".gradle",
-    ".m2",
-
-    # .NET / C#
-    "packages",
-
-    # IDE / Editor
-    ".idea",
-    ".vscode",
-    ".vs",
-    ".eclipse",
-    ".settings",
-    ".project",
-
-    # Coverage & profiling
-    "htmlcov",
-    "coverage",
-    ".nyc_output",
-
-    # Docker
-    ".docker",
-
-    # Terraform
-    ".terraform",
-
-    # Miscellaneous caches
-    ".cache",
-    ".sass-cache",
-    ".eslintcache",
-    ".stylelintcache",
-    ".angular",
-    ".webpack",
-})
+SKIP_DIRS: frozenset[str] = frozenset(
+    {
+        # Version control
+        ".git",
+        ".hg",
+        ".svn",
+        ".bzr",
+        "_darcs",
+        ".fossil",
+        # Python
+        "__pycache__",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".pytest_cache",
+        ".tox",
+        ".nox",
+        ".eggs",
+        ".ipynb_checkpoints",
+        "site-packages",
+        # Virtual environments
+        "venv",
+        ".venv",
+        "env",
+        ".env",
+        ".virtualenvs",
+        "__pypackages__",
+        ".pixi",
+        ".conda",
+        # Node / JS / TS
+        "node_modules",
+        ".npm",
+        ".yarn",
+        ".pnpm-store",
+        "bower_components",
+        ".next",
+        ".nuxt",
+        ".svelte-kit",
+        ".parcel-cache",
+        ".turbo",
+        # Build / distribution outputs
+        "dist",
+        "build",
+        "out",
+        "target",
+        "bin",
+        "obj",
+        "_build",
+        "cmake-build-debug",
+        "cmake-build-release",
+        # Rust
+        # (target/ already listed above)
+        # Go
+        "vendor",  # also PHP Composer
+        # Java / Gradle / Maven
+        ".gradle",
+        ".m2",
+        # .NET / C#
+        "packages",
+        # IDE / Editor
+        ".idea",
+        ".vscode",
+        ".vs",
+        ".eclipse",
+        ".settings",
+        ".project",
+        # Coverage & profiling
+        "htmlcov",
+        "coverage",
+        ".nyc_output",
+        # Docker
+        ".docker",
+        # Terraform
+        ".terraform",
+        # Miscellaneous caches
+        ".cache",
+        ".sass-cache",
+        ".eslintcache",
+        ".stylelintcache",
+        ".angular",
+        ".webpack",
+    }
+)
 
 
 # ── files to skip (exact name match, case-insensitive) ──
 
-SKIP_FILES: frozenset[str] = frozenset({
-    # OS junk
-    ".ds_store",
-    "thumbs.db",
-    "desktop.ini",
-    "icon\r",              # macOS Icon? file
-
-    # Git
-    ".gitignore",
-    ".gitattributes",
-    ".gitmodules",
-    ".gitkeep",
-    ".git-blame-ignore-revs",
-
-    # Editor / IDE
-    ".editorconfig",
-
-    # Python packaging
-    "setup.cfg",
-    "manifest.in",
-    "pip-log.txt",
-    "pip-delete-this-directory.txt",
-
-    # Node / JS locks & configs
-    "package-lock.json",
-    "yarn.lock",
-    "pnpm-lock.yaml",
-    "bun.lockb",
-    ".npmrc",
-    ".yarnrc",
-    ".yarnrc.yml",
-    ".nvmrc",
-    ".node-version",
-    ".browserslistrc",
-
-    # Rust
-    "cargo.lock",
-
-    # Go
-    "go.sum",
-
-    # Ruby
-    "gemfile.lock",
-
-    # PHP
-    "composer.lock",
-
-    # Python
-    "poetry.lock",
-    "pdm.lock",
-    "pipfile.lock",
-    "uv.lock",
-
-    # .NET
-    "packages.lock.json",
-
-    # Coverage data files
-    ".coverage",
-    "coverage.xml",
-    "coverage.json",
-    ".lcov",
-
-    # Docker
-    ".dockerignore",
-
-    # Environment / secrets (avoid indexing secrets!)
-    ".env",
-    ".env.local",
-    ".env.development",
-    ".env.production",
-    ".env.test",
-    ".env.staging",
-    ".env.example",
-    ".flaskenv",
-
-    # Misc config that isn't useful content
-    ".eslintrc",
-    ".eslintrc.js",
-    ".eslintrc.json",
-    ".eslintrc.yml",
-    ".prettierrc",
-    ".prettierrc.js",
-    ".prettierrc.json",
-    ".prettierrc.yml",
-    ".prettierignore",
-    ".stylelintrc",
-    ".stylelintrc.json",
-    ".babelrc",
-    ".babelrc.js",
-    ".postcssrc",
-    ".commitlintrc",
-    ".commitlintrc.yml",
-    ".huskyrc",
-    ".lintstagedrc",
-    ".pylintrc",
-    ".flake8",
-    ".isort.cfg",
-    ".mypy.ini",
-    ".bandit",
-    ".pre-commit-config.yaml",
-    ".rubocop.yml",
-    ".scalafmt.conf",
-    ".clang-format",
-    ".clang-tidy",
-    ".rustfmt.toml",
-    "rustfmt.toml",
-    "pyrightconfig.json",
-
-    # Terraform
-    ".terraform.lock.hcl",
-})
+SKIP_FILES: frozenset[str] = frozenset(
+    {
+        # OS junk
+        ".ds_store",
+        "thumbs.db",
+        "desktop.ini",
+        "icon\r",  # macOS Icon? file
+        # Git
+        ".gitignore",
+        ".gitattributes",
+        ".gitmodules",
+        ".gitkeep",
+        ".git-blame-ignore-revs",
+        # Editor / IDE
+        ".editorconfig",
+        # Python packaging
+        "setup.cfg",
+        "manifest.in",
+        "pip-log.txt",
+        "pip-delete-this-directory.txt",
+        # Node / JS locks & configs
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "bun.lockb",
+        ".npmrc",
+        ".yarnrc",
+        ".yarnrc.yml",
+        ".nvmrc",
+        ".node-version",
+        ".browserslistrc",
+        # Rust
+        "cargo.lock",
+        # Go
+        "go.sum",
+        # Ruby
+        "gemfile.lock",
+        # PHP
+        "composer.lock",
+        # Python
+        "poetry.lock",
+        "pdm.lock",
+        "pipfile.lock",
+        "uv.lock",
+        # .NET
+        "packages.lock.json",
+        # Coverage data files
+        ".coverage",
+        "coverage.xml",
+        "coverage.json",
+        ".lcov",
+        # Docker
+        ".dockerignore",
+        # Environment / secrets (avoid indexing secrets!)
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.production",
+        ".env.test",
+        ".env.staging",
+        ".env.example",
+        ".flaskenv",
+        # Misc config that isn't useful content
+        ".eslintrc",
+        ".eslintrc.js",
+        ".eslintrc.json",
+        ".eslintrc.yml",
+        ".prettierrc",
+        ".prettierrc.js",
+        ".prettierrc.json",
+        ".prettierrc.yml",
+        ".prettierignore",
+        ".stylelintrc",
+        ".stylelintrc.json",
+        ".babelrc",
+        ".babelrc.js",
+        ".postcssrc",
+        ".commitlintrc",
+        ".commitlintrc.yml",
+        ".huskyrc",
+        ".lintstagedrc",
+        ".pylintrc",
+        ".flake8",
+        ".isort.cfg",
+        ".mypy.ini",
+        ".bandit",
+        ".pre-commit-config.yaml",
+        ".rubocop.yml",
+        ".scalafmt.conf",
+        ".clang-format",
+        ".clang-tidy",
+        ".rustfmt.toml",
+        "rustfmt.toml",
+        "pyrightconfig.json",
+        # Terraform
+        ".terraform.lock.hcl",
+    }
+)
 
 
 # ── file suffixes to skip (matched against the lowercased file name) ──
@@ -250,7 +223,6 @@ SKIP_SUFFIXES: tuple[str, ...] = (
     ".pyc",
     ".pyo",
     ".pyd",
-
     # Compiled / object files
     ".o",
     ".obj",
@@ -263,9 +235,8 @@ SKIP_SUFFIXES: tuple[str, ...] = (
     ".jar",
     ".war",
     ".ear",
-
     # Archives (not parseable content)
-    ".zip",     # note: epub/docx/odt use zip internally but have their own extensions
+    ".zip",  # note: epub/docx/odt use zip internally but have their own extensions
     ".tar",
     ".gz",
     ".bz2",
@@ -274,35 +245,30 @@ SKIP_SUFFIXES: tuple[str, ...] = (
     ".rar",
     ".tgz",
     ".tar.gz",
-
     # Executables / binaries
     ".exe",
     ".msi",
     ".app",
     ".bin",
     ".wasm",
-
     # Minified / generated JS/CSS
     ".min.js",
     ".min.css",
-    ".map",       # source maps
+    ".map",  # source maps
     ".chunk.js",
     ".bundle.js",
-
     # Images (unless you want OCR — handled by image_parser separately)
     # Skipping common image formats that aren't documents
     ".ico",
     ".icns",
     ".cur",
     ".ani",
-
     # Fonts
     ".woff",
     ".woff2",
     ".ttf",
     ".otf",
     ".eot",
-
     # Media
     ".mp3",
     ".mp4",
@@ -317,7 +283,6 @@ SKIP_SUFFIXES: tuple[str, ...] = (
     ".webm",
     ".m4a",
     ".aac",
-
     # Database files
     ".sqlite",
     ".sqlite3",
@@ -326,7 +291,6 @@ SKIP_SUFFIXES: tuple[str, ...] = (
     ".db-wal",
     ".mdb",
     ".ldb",
-
     # Keys / certs (avoid indexing secrets!)
     ".pem",
     ".key",
@@ -335,7 +299,6 @@ SKIP_SUFFIXES: tuple[str, ...] = (
     ".p12",
     ".pfx",
     ".jks",
-
     # Temp / swap / backup
     ".tmp",
     ".temp",
@@ -345,14 +308,12 @@ SKIP_SUFFIXES: tuple[str, ...] = (
     ".bak",
     ".orig",
     ".rej",
-    "~",           # Emacs backup files (e.g. foo.py~)
-
+    "~",  # Emacs backup files (e.g. foo.py~)
     # Python eggs
     ".egg-info",
     ".egg",
     ".whl",
     ".dist-info",
-
     # Misc generated
     ".tfstate",
     ".tfstate.backup",
@@ -362,6 +323,7 @@ SKIP_SUFFIXES: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
+
 
 def is_skipped_dir(dirname: str) -> bool:
     """Return True if *dirname* (bare name, not full path) should be skipped.
@@ -374,9 +336,7 @@ def is_skipped_dir(dirname: str) -> bool:
     if lower in SKIP_DIRS:
         return True
     # Catch *.egg-info directories (e.g. mypackage.egg-info)
-    if lower.endswith(".egg-info"):
-        return True
-    return False
+    return bool(lower.endswith(".egg-info"))
 
 
 def is_skipped_file(filename: str) -> bool:
@@ -388,10 +348,7 @@ def is_skipped_file(filename: str) -> bool:
     lower = filename.lower()
     if lower in SKIP_FILES:
         return True
-    for suffix in SKIP_SUFFIXES:
-        if lower.endswith(suffix):
-            return True
-    return False
+    return any(lower.endswith(suffix) for suffix in SKIP_SUFFIXES)
 
 
 def is_skipped_path(path: str) -> bool:

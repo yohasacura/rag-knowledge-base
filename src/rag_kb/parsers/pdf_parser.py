@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import io
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +42,10 @@ _MAX_IMAGES_PER_PDF = 200
 @dataclass
 class _PendingImage:
     """Tracks an image awaiting batch OCR."""
-    page_idx: int       # 0-based page index
-    img_idx: int        # index within the page's image list
-    pil_image: object   # PIL.Image.Image
+
+    page_idx: int  # 0-based page index
+    img_idx: int  # index within the page's image list
+    pil_image: object  # PIL.Image.Image
 
 
 class PdfParser:
@@ -61,7 +62,7 @@ class PdfParser:
         reader = PdfReader(str(file_path))
 
         # ── Phase 1: extract text + collect images ──────────────────
-        page_texts: list[str] = []            # per-page extracted text
+        page_texts: list[str] = []  # per-page extracted text
         pending_images: list[_PendingImage] = []  # images awaiting OCR
 
         for i, page in enumerate(reader.pages):
@@ -82,8 +83,7 @@ class PdfParser:
             try:
                 self._collect_page_images(page, i, pending_images)
             except Exception as exc:
-                logger.debug("Image extraction failed on page %d of %s: %s",
-                             i + 1, file_path, exc)
+                logger.debug("Image extraction failed on page %d of %s: %s", i + 1, file_path, exc)
 
         # Save page count + title before releasing the reader.
         n_pages = len(reader.pages)
@@ -170,14 +170,15 @@ class PdfParser:
                 if pil_img.width < 50 or pil_img.height < 50:
                     continue
 
-                pending.append(_PendingImage(
-                    page_idx=page_idx,
-                    img_idx=idx,
-                    pil_image=pil_img,
-                ))
+                pending.append(
+                    _PendingImage(
+                        page_idx=page_idx,
+                        img_idx=idx,
+                        pil_image=pil_img,
+                    )
+                )
             except Exception as exc:
-                logger.debug("Cannot open image %d on page %d: %s",
-                             idx, page_idx + 1, exc)
+                logger.debug("Cannot open image %d on page %d: %s", idx, page_idx + 1, exc)
 
     # ------------------------------------------------------------------
     # Batch OCR (phase 2)
@@ -203,7 +204,7 @@ class PdfParser:
 
             ocr_out = ocr_images_batch(images, labels=labels)
 
-            for pend, (text, engine) in zip(batch, ocr_out):
+            for pend, (text, _engine) in zip(batch, ocr_out, strict=False):
                 # Release the PIL image immediately — it can be tens of MB
                 # of uncompressed bitmap and we no longer need it.
                 pend.pil_image = None  # type: ignore[assignment]

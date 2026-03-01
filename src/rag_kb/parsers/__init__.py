@@ -1,5 +1,5 @@
 """Document parsers package."""
 
-from rag_kb.parsers.registry import get_parser, SUPPORTED_EXTENSIONS
+from rag_kb.parsers.registry import SUPPORTED_EXTENSIONS, get_parser
 
-__all__ = ["get_parser", "SUPPORTED_EXTENSIONS"]
+__all__ = ["SUPPORTED_EXTENSIONS", "get_parser"]

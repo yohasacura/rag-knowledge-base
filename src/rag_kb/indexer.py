@@ -26,11 +26,11 @@ import logging
 import os
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, Future, as_completed
+from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
 
 from rag_kb.chunker import TextChunk, chunk_text
 from rag_kb.config import AppSettings, RagEntry, RagRegistry
@@ -128,13 +128,13 @@ class Indexer:
         if self._manifest is not None:
             try:
                 self._manifest.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._manifest = None
         if self._store is not None:
             try:
                 self._store.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
             self._store = None
 
@@ -164,7 +164,7 @@ class Indexer:
         """Write a lock file indicating indexing is in progress."""
         lock_path = self._lock_file_path()
         try:
-            os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+            Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
             with open(lock_path, "w", encoding="utf-8") as f:
                 json.dump(
                     {
@@ -182,7 +182,7 @@ class Indexer:
         lock_path = self._lock_file_path()
         try:
             if os.path.exists(lock_path):
-                os.remove(lock_path)
+                Path(lock_path).unlink()
         except OSError as exc:
             logger.warning("Could not remove indexing lock file: %s", exc)
 
@@ -197,14 +197,14 @@ class Indexer:
         if not os.path.exists(lock_path):
             return None
         try:
-            with open(lock_path, "r", encoding="utf-8") as f:
+            with open(lock_path, encoding="utf-8") as f:
                 info = json.load(f)
-            os.remove(lock_path)
+            Path(lock_path).unlink()
             return info
         except (OSError, json.JSONDecodeError) as exc:
             logger.warning("Could not read indexing lock file: %s", exc)
             try:
-                os.remove(lock_path)
+                Path(lock_path).unlink()
             except OSError:
                 pass
             return {"started_at": "unknown", "pid": 0, "full": False}
@@ -229,7 +229,10 @@ class Indexer:
 
         logger.info(
             "Index start: rag='%s' full=%s model=%s folders=%s",
-            self.rag.name, full, self.rag.embedding_model, self.rag.source_folders,
+            self.rag.name,
+            full,
+            self.rag.embedding_model,
+            self.rag.source_folders,
         )
         t0 = time.monotonic()
         t_start_wall = time.time()
@@ -305,7 +308,9 @@ class Indexer:
             workers = self._effective_workers()
             logger.info(
                 "Processing %d file(s) in batches of %d (workers=%d)",
-                len(files_to_index), _FILE_BATCH_SIZE, workers,
+                len(files_to_index),
+                _FILE_BATCH_SIZE,
+                workers,
             )
 
             # ── Pipeline: parse batch N+1 while embedding batch N ──
@@ -316,19 +321,17 @@ class Indexer:
             embed_pool = ThreadPoolExecutor(max_workers=1)
             try:
                 pending_embed: Future | None = None
-                batch_ranges = list(
-                    range(0, len(files_to_index), _FILE_BATCH_SIZE)
-                )
+                batch_ranges = list(range(0, len(files_to_index), _FILE_BATCH_SIZE))
 
                 for batch_idx, batch_start in enumerate(batch_ranges):
                     self._check_cancelled()
-                    batch_files = files_to_index[
-                        batch_start : batch_start + _FILE_BATCH_SIZE
-                    ]
+                    batch_files = files_to_index[batch_start : batch_start + _FILE_BATCH_SIZE]
                     batch_num = batch_idx + 1
                     logger.info(
                         "Processing batch %d/%d (%d files)",
-                        batch_num, len(batch_ranges), len(batch_files),
+                        batch_num,
+                        len(batch_ranges),
+                        len(batch_files),
                     )
 
                     # Phase 1: Parse
@@ -344,7 +347,8 @@ class Indexer:
                     if parsed:
                         # Phase 2-6: embed + upsert (runs in background)
                         pending_embed = embed_pool.submit(
-                            self._embed_and_upsert, parsed,
+                            self._embed_and_upsert,
+                            parsed,
                         )
                     else:
                         pending_embed = None
@@ -378,8 +382,10 @@ class Indexer:
 
             logger.info(
                 "Index done: %d files, %d chunks, %.1fs, %d error(s)",
-                self.state.processed_files, self.state.total_chunks,
-                self.state.duration_seconds, len(self.state.errors),
+                self.state.processed_files,
+                self.state.total_chunks,
+                self.state.duration_seconds,
+                len(self.state.errors),
             )
             return self.state
 
@@ -550,7 +556,9 @@ class Indexer:
             embed_batch = self.settings.embedding_batch_size
             logger.debug(
                 "Phase 4: Embedding %d chunks (model=%s, batch=%d)",
-                len(all_chunks), self.rag.embedding_model, embed_batch,
+                len(all_chunks),
+                self.rag.embedding_model,
+                embed_batch,
             )
 
             texts = [c.text for c in all_chunks]
@@ -579,6 +587,7 @@ class Indexer:
 
             # Sub-batch for cancellation checks; keep numpy arrays
             import numpy as _np
+
             t_embed = time.monotonic()
             emb_parts: list[_np.ndarray] = []
             for sub_start in range(0, len(texts), embed_batch):
@@ -591,20 +600,21 @@ class Indexer:
                         batch_size=embed_batch,
                         as_numpy=True,
                     )
-                except TypeError as exc:
+                except TypeError:
                     # Log offending sub-batch context so the file/chunk can
                     # be identified and reported.
-                    logger.error(
-                        "Embedding TypeError on sub-batch starting at %d "
-                        "(batch_size=%d, model=%s): %s",
-                        sub_start, embed_batch, self.rag.embedding_model, exc,
+                    logger.exception(
+                        "Embedding TypeError on sub-batch starting at %d (batch_size=%d, model=%s)",
+                        sub_start,
+                        embed_batch,
+                        self.rag.embedding_model,
                     )
                     for j, st in enumerate(sub_texts):
                         if not isinstance(st, str) or not st.strip():
-                            logger.error(
-                                "  Offending text at sub-batch index %d: "
-                                "type=%s len=%d source=%s",
-                                j, type(st).__name__,
+                            logger.exception(
+                                "  Offending text at sub-batch index %d: type=%s len=%d source=%s",
+                                j,
+                                type(st).__name__,
                                 len(st) if isinstance(st, str) else -1,
                                 all_chunks[sub_start + j].source_file,
                             )
@@ -630,7 +640,9 @@ class Indexer:
                 }
                 for c in all_chunks
             ]
-            self.store.add_documents(ids=ids, texts=texts, embeddings=embeddings, metadatas=metadatas)
+            self.store.add_documents(
+                ids=ids, texts=texts, embeddings=embeddings, metadatas=metadatas
+            )
             self.state.upsert_seconds += round(time.monotonic() - t_upsert, 4)
             logger.debug("Phase 5: Upserted %d chunks into vector store", len(ids))
 
@@ -640,10 +652,7 @@ class Indexer:
             for c in all_chunks:
                 file_chunk_counts[c.source_file] = file_chunk_counts.get(c.source_file, 0) + 1
 
-            manifest_records = [
-                (src, file_chunk_counts.get(src, 0))
-                for src in sources_in_batch
-            ]
+            manifest_records = [(src, file_chunk_counts.get(src, 0)) for src in sources_in_batch]
             self.manifest.batch_mark_indexed(manifest_records)
             self.state.manifest_seconds += round(time.monotonic() - t_manifest, 4)
 
@@ -739,7 +748,7 @@ class Indexer:
         files: list[str] = []
         exts = set(self.settings.supported_extensions)
         for folder in self.rag.source_folders:
-            if not os.path.isdir(folder):
+            if not Path(folder).is_dir():
                 logger.warning("Source folder does not exist: %s", folder)
                 continue
             for root, dirs, filenames in os.walk(folder):
@@ -755,9 +764,7 @@ class Indexer:
         files.sort()
         return [Path(f) for f in files]
 
-    def _filter_changed_manifest(
-        self, file_paths: list[Path], full: bool
-    ) -> list[Path]:
+    def _filter_changed_manifest(self, file_paths: list[Path], full: bool) -> list[Path]:
         """Use the SQLite manifest for fast change detection.
 
         Uses ``batch_filter_changed()`` for a single SQL query instead of
@@ -791,9 +798,16 @@ class Indexer:
         return min(cpus, 8)
 
     def _update_registry_stats(self) -> None:
-        stats = self.store.get_stats()
-        self.rag.file_count = stats.total_files
-        self.rag.chunk_count = stats.total_chunks
+        total_files = self.manifest.count()
+        try:
+            total_chunks = int(self.store.count())
+        except (TypeError, ValueError):
+            total_chunks = 0
+        # Persist to manifest SQLite for zero-cost status polling
+        self.manifest.save_stats(total_files, total_chunks)
+        # Update registry entry for rag.list
+        self.rag.file_count = total_files
+        self.rag.chunk_count = total_chunks
         self.registry.update_rag(self.rag)
 
     def _record_indexing_metrics(self, started_at_wall: float, full: bool) -> None:
@@ -803,29 +817,32 @@ class Indexer:
 
             mc = MetricsCollector.get()
             s = self.state
-            mc.record_indexing_run(IndexingRunMetrics(
-                rag_name=self.rag.name,
-                started_at=started_at_wall,
-                duration_seconds=s.duration_seconds,
-                total_files=s.total_files,
-                processed_files=s.processed_files,
-                skipped_files=s.total_files - s.processed_files,
-                total_chunks=s.total_chunks,
-                error_count=len(s.errors),
-                status=s.status,
-                scan_seconds=s.scan_seconds,
-                parse_seconds=s.parse_seconds,
-                chunk_seconds=s.chunk_seconds,
-                embed_seconds=s.embed_seconds,
-                upsert_seconds=s.upsert_seconds,
-                manifest_seconds=s.manifest_seconds,
-                chunks_per_second=s.chunks_per_second,
-                files_per_second=(
-                    round(s.processed_files / s.duration_seconds, 1)
-                    if s.duration_seconds > 0 else 0.0
-                ),
-                is_full_reindex=full,
-            ))
+            mc.record_indexing_run(
+                IndexingRunMetrics(
+                    rag_name=self.rag.name,
+                    started_at=started_at_wall,
+                    duration_seconds=s.duration_seconds,
+                    total_files=s.total_files,
+                    processed_files=s.processed_files,
+                    skipped_files=s.total_files - s.processed_files,
+                    total_chunks=s.total_chunks,
+                    error_count=len(s.errors),
+                    status=s.status,
+                    scan_seconds=s.scan_seconds,
+                    parse_seconds=s.parse_seconds,
+                    chunk_seconds=s.chunk_seconds,
+                    embed_seconds=s.embed_seconds,
+                    upsert_seconds=s.upsert_seconds,
+                    manifest_seconds=s.manifest_seconds,
+                    chunks_per_second=s.chunks_per_second,
+                    files_per_second=(
+                        round(s.processed_files / s.duration_seconds, 1)
+                        if s.duration_seconds > 0
+                        else 0.0
+                    ),
+                    is_full_reindex=full,
+                )
+            )
         except Exception:
             logger.debug("Failed to record indexing metrics", exc_info=True)
 
@@ -839,13 +856,15 @@ class Indexer:
         - Surya OCR model weights (reconstituted lazily on next OCR call)
         """
         import gc
+
         gc.collect()
 
         try:
             import torch
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         # Release the Surya OCR singletons — they hold ~1.5 GB of model
@@ -853,6 +872,7 @@ class Indexer:
         # They will be re-initialised lazily if OCR is needed again.
         try:
             from rag_kb.parsers import image_parser as _ip
+
             with _ip._surya_lock:
                 if _ip._surya_rec_predictor is not None:
                     del _ip._surya_rec_predictor
@@ -860,7 +880,7 @@ class Indexer:
                     _ip._surya_rec_predictor = None
                     _ip._surya_det_predictor = None
                     logger.info("Released Surya OCR models to free RAM.")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         gc.collect()

@@ -2,6 +2,6 @@
 
 __version__ = "1.0.0"
 
-from rag_kb.core import RagKnowledgeBaseAPI  # noqa: F401
+from rag_kb.core import RagKnowledgeBaseAPI
 
 __all__ = ["RagKnowledgeBaseAPI"]

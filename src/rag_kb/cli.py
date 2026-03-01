@@ -12,8 +12,8 @@ import sys
 from pathlib import Path
 
 from rich.console import Console
-from rich.table import Table
 from rich.logging import RichHandler
+from rich.table import Table
 
 console = Console()
 
@@ -28,8 +28,14 @@ def _setup_logging(verbose: bool = False) -> None:
     )
     # Quieten noisy libraries
     for lib in (
-        "chromadb", "sentence_transformers", "httpx", "httpcore",
-        "urllib3", "watchdog", "huggingface_hub", "transformers",
+        "chromadb",
+        "sentence_transformers",
+        "httpx",
+        "httpcore",
+        "urllib3",
+        "watchdog",
+        "huggingface_hub",
+        "transformers",
         "safetensors",
     ):
         logging.getLogger(lib).setLevel(logging.WARNING)
@@ -38,6 +44,7 @@ def _setup_logging(verbose: bool = False) -> None:
 def _client():
     """Lazy-create a DaemonClient, ensuring the daemon is running."""
     from rag_kb.daemon_client import DaemonClient
+
     client = DaemonClient()
     client.ensure_daemon()
     client.connect()
@@ -47,6 +54,7 @@ def _client():
 # -----------------------------------------------------------------------
 # Sub-commands
 # -----------------------------------------------------------------------
+
 
 def cmd_create(args: argparse.Namespace) -> None:
     client = _client()
@@ -70,7 +78,9 @@ def cmd_list(args: argparse.Namespace) -> None:
             break
 
     if not rags:
-        console.print("[yellow]No RAG databases found.[/yellow] Use [bold]rag-kb create[/bold] to create one.")
+        console.print(
+            "[yellow]No RAG databases found.[/yellow] Use [bold]rag-kb create[/bold] to create one."
+        )
         return
 
     table = Table(title="RAG Databases")
@@ -88,9 +98,14 @@ def cmd_list(args: argparse.Namespace) -> None:
         rtype = "📥 Imported" if r.get("is_imported") else "📁 Local"
         status = "🔒 Detached" if r.get("detached") else ""
         table.add_row(
-            marker, r["name"], rtype, r.get("embedding_model", ""),
-            str(r.get("file_count", 0)), str(r.get("chunk_count", 0)),
-            status, r.get("description", ""),
+            marker,
+            r["name"],
+            rtype,
+            r.get("embedding_model", ""),
+            str(r.get("file_count", 0)),
+            str(r.get("chunk_count", 0)),
+            status,
+            r.get("description", ""),
         )
     console.print(table)
 
@@ -103,10 +118,11 @@ def cmd_use(args: argparse.Namespace) -> None:
 
 def cmd_delete(args: argparse.Namespace) -> None:
     client = _client()
-    if not args.yes:
-        if not console.input(f"Delete RAG '{args.name}'? [y/N] ").strip().lower().startswith("y"):
-            console.print("Cancelled.")
-            return
+    if not args.yes and not console.input(
+        f"Delete RAG '{args.name}'? [y/N] "
+    ).strip().lower().startswith("y"):
+        console.print("Cancelled.")
+        return
     client.delete_rag(args.name)
     console.print(f"[green]✔[/green] Deleted RAG [bold]{args.name}[/bold]")
 
@@ -174,7 +190,9 @@ def cmd_cancel_index(args: argparse.Namespace) -> None:
     client = _client()
     result = client.cancel_indexing()
     if result.get("cancelled"):
-        console.print("[green]✔[/green] Cancellation requested — indexing will stop at the next checkpoint.")
+        console.print(
+            "[green]✔[/green] Cancellation requested — indexing will stop at the next checkpoint."
+        )
     else:
         console.print("[yellow]No indexing operation is currently running.[/yellow]")
 
@@ -218,9 +236,13 @@ def cmd_verify(args: argparse.Namespace) -> None:
             console.print(f"    … and {len(orphan_manifest) - 20} more")
 
     if result.get("incomplete_indexing"):
-        console.print("\n  [bold]Incomplete indexing[/bold]: lock file detected from a previous crash.")
+        console.print(
+            "\n  [bold]Incomplete indexing[/bold]: lock file detected from a previous crash."
+        )
 
-    console.print("\n  Run [bold]rag-kb index[/bold] or [bold]rag-kb index --full[/bold] to repair.")
+    console.print(
+        "\n  Run [bold]rag-kb index[/bold] or [bold]rag-kb index --full[/bold] to repair."
+    )
 
 
 def cmd_search(args: argparse.Namespace) -> None:
@@ -237,7 +259,9 @@ def cmd_search(args: argparse.Namespace) -> None:
 
     for i, r in enumerate(results, 1):
         console.print(f"\n[bold cyan]─── Result {i} ───[/bold cyan]")
-        console.print(f"[bold]Source:[/bold] {r['source_file']}  [dim](chunk {r['chunk_index']}, score {r['score']})[/dim]")
+        console.print(
+            f"[bold]Source:[/bold] {r['source_file']}  [dim](chunk {r['chunk_index']}, score {r['score']})[/dim]"
+        )
         console.print(r["text"])
 
 
@@ -252,7 +276,9 @@ def cmd_status(args: argparse.Namespace) -> None:
     console.print(f"[bold]Active RAG:[/bold]   {status['active_rag']}")
     console.print(f"[bold]Files:[/bold]        {status.get('total_files', 0)}")
     console.print(f"[bold]Chunks:[/bold]       {status.get('total_chunks', 0)}")
-    console.print(f"[bold]Watcher:[/bold]      {'running' if status.get('watcher_running') else 'stopped'}")
+    console.print(
+        f"[bold]Watcher:[/bold]      {'running' if status.get('watcher_running') else 'stopped'}"
+    )
     if status.get("last_indexed"):
         console.print(f"[bold]Last indexed:[/bold] {status['last_indexed']}")
     errors = status.get("errors", [])
@@ -362,12 +388,13 @@ def cmd_config(args: argparse.Namespace) -> None:
     console.print()
 
     import yaml
+
     console.print(yaml.safe_dump(settings, default_flow_style=False))
 
 
 def cmd_download_models(args: argparse.Namespace) -> None:
     client = _client()
-    console.print(f"Downloading models …")
+    console.print("Downloading models …")
 
     result = client.download_models(
         output_dir=args.output,
@@ -415,8 +442,11 @@ def cmd_models(args: argparse.Namespace) -> None:
                 "available": "[dim]available[/dim]",
             }.get(status, status)
             table.add_row(
-                m["name"], m["type"],
-                dim_ctx, size, status_style,
+                m["name"],
+                m["type"],
+                dim_ctx,
+                size,
+                status_style,
             )
         console.print(table)
 
@@ -455,18 +485,20 @@ def cmd_models(args: argparse.Namespace) -> None:
 
     elif action == "delete":
         model_name = args.model_name
-        if not getattr(args, "yes", False):
-            if not console.input(
-                f"Delete model '{model_name}'? [y/N] "
-            ).strip().lower().startswith("y"):
-                console.print("Cancelled.")
-                return
+        if not getattr(args, "yes", False) and (
+            not console.input(f"Delete model '{model_name}'? [y/N] ")
+            .strip()
+            .lower()
+            .startswith("y")
+        ):
+            console.print("Cancelled.")
+            return
         try:
             result = client.delete_model(model_name)
             if result.get("deleted"):
                 console.print(f"[green]✔[/green] Deleted {model_name}")
             else:
-                console.print(f"[yellow]Model not found locally.[/yellow]")
+                console.print("[yellow]Model not found locally.[/yellow]")
         except Exception as exc:
             console.print(f"[red]Error:[/red] {exc}")
 
@@ -490,7 +522,9 @@ def cmd_daemon(args: argparse.Namespace) -> None:
         if client._probe():
             client.connect()
             info = client.ping()
-            console.print(f"[green]●[/green] Daemon is running (PID {info.get('pid', '?')}, uptime {info.get('uptime', '?')}s)")
+            console.print(
+                f"[green]●[/green] Daemon is running (PID {info.get('pid', '?')}, uptime {info.get('uptime', '?')}s)"
+            )
             client.close()
         else:
             console.print("[red]●[/red] Daemon is not running.")
@@ -500,9 +534,25 @@ def cmd_daemon(args: argparse.Namespace) -> None:
             client.connect()
             client.shutdown()
             client.close()
+            # Wait briefly for graceful shutdown
+            import time
+
+            time.sleep(1)
+            # If still alive, force-kill
+            from rag_kb.daemon_client import _is_daemon_alive, kill_stale_daemon
+
+            if _is_daemon_alive():
+                kill_stale_daemon(graceful_timeout=3.0)
             console.print("[green]✔[/green] Daemon stopped.")
         else:
-            console.print("[yellow]Daemon is not running.[/yellow]")
+            # PID alive but not responding? Kill it.
+            from rag_kb.daemon_client import _is_daemon_alive, kill_stale_daemon
+
+            if _is_daemon_alive():
+                kill_stale_daemon(graceful_timeout=3.0)
+                console.print("[green]✔[/green] Stale daemon killed.")
+            else:
+                console.print("[yellow]Daemon is not running.[/yellow]")
 
     elif action == "restart":
         if client._probe():
@@ -511,7 +561,16 @@ def cmd_daemon(args: argparse.Namespace) -> None:
             client.close()
             console.print("Daemon stopped. Restarting …")
             import time
+
             time.sleep(1)
+        # Kill any stale daemon that didn't shut down cleanly
+        from rag_kb.daemon_client import _is_daemon_alive, kill_stale_daemon
+
+        if _is_daemon_alive():
+            kill_stale_daemon(graceful_timeout=3.0)
+            import time
+
+            time.sleep(0.5)
         client.ensure_daemon()
         console.print("[green]✔[/green] Daemon restarted.")
 
@@ -536,7 +595,7 @@ def _cmd_daemon_logs(args: argparse.Namespace) -> None:
         console.print(f"[dim]Following {log_file}  (Ctrl+C to stop)[/dim]")
     # -- Print last N lines --
     try:
-        with open(log_file, "r", encoding="utf-8", errors="replace") as fh:
+        with open(log_file, encoding="utf-8", errors="replace") as fh:
             if tail_lines == 0:
                 # Print ALL lines
                 for line in fh:
@@ -548,7 +607,7 @@ def _cmd_daemon_logs(args: argparse.Namespace) -> None:
                 lines = fh.readlines()
                 for line in lines[-tail_lines:]:
                     sys.stdout.write(line)
-                last_pos = fh.tell()
+                fh.tell()
     except OSError as exc:
         console.print(f"[red]Error reading log file:[/red] {exc}")
         return
@@ -558,7 +617,7 @@ def _cmd_daemon_logs(args: argparse.Namespace) -> None:
 
     # -- Follow mode (like tail -f) --
     try:
-        with open(log_file, "r", encoding="utf-8", errors="replace") as fh:
+        with open(log_file, encoding="utf-8", errors="replace") as fh:
             # Seek to end
             fh.seek(0, 2)
             while True:
@@ -591,6 +650,7 @@ def _dir_size_mb(path: Path) -> float:
 # Monitoring / stats commands
 # -----------------------------------------------------------------------
 
+
 def cmd_stats(args: argparse.Namespace) -> None:
     """Show comprehensive metrics and monitoring statistics."""
     client = _client()
@@ -606,7 +666,10 @@ def cmd_stats(args: argparse.Namespace) -> None:
             t.add_column("Metric", style="bold cyan")
             t.add_column("Value", style="white")
             t.add_row("CPU", f"{sys_snap.get('cpu_percent', 0):.1f}%")
-            t.add_row("Memory", f"{sys_snap.get('memory_used_mb', 0):.0f} / {sys_snap.get('memory_total_mb', 0):.0f} MB ({sys_snap.get('memory_percent', 0):.1f}%)")
+            t.add_row(
+                "Memory",
+                f"{sys_snap.get('memory_used_mb', 0):.0f} / {sys_snap.get('memory_total_mb', 0):.0f} MB ({sys_snap.get('memory_percent', 0):.1f}%)",
+            )
             t.add_row("Process RAM", f"{sys_snap.get('process_memory_mb', 0):.1f} MB")
             t.add_row("Disk Free", f"{sys_snap.get('disk_free_mb', 0):.0f} MB")
             uptime = sys_snap.get("daemon_uptime_seconds", 0)
@@ -667,6 +730,7 @@ def cmd_stats(args: argparse.Namespace) -> None:
             t.add_column("Errors", justify="right", style="red")
             for h in history:
                 import datetime
+
                 ts = h.get("started_at", 0)
                 dt = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "?"
                 color = "green" if h.get("status") == "completed" else "red"
@@ -699,11 +763,14 @@ def cmd_stats(args: argparse.Namespace) -> None:
             t.add_column("Top Score", justify="right")
             for s in search_stats:
                 import datetime
+
                 ts = s.get("timestamp", 0)
                 dt = datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else "?"
                 t.add_row(
                     dt,
-                    (s.get("query_text", "")[:40] + "…") if len(s.get("query_text", "")) > 40 else s.get("query_text", ""),
+                    (s.get("query_text", "")[:40] + "…")
+                    if len(s.get("query_text", "")) > 40
+                    else s.get("query_text", ""),
                     str(s.get("result_count", 0)),
                     f"{s.get('total_ms', 0):.0f}",
                     f"{s.get('vector_search_ms', 0):.0f}",
@@ -726,6 +793,7 @@ def cmd_stats(args: argparse.Namespace) -> None:
             t.add_column("Device", style="dim")
             for e in emb_stats:
                 import datetime
+
                 ts = e.get("timestamp", 0)
                 dt = datetime.datetime.fromtimestamp(ts).strftime("%H:%M:%S") if ts else "?"
                 t.add_row(
@@ -768,8 +836,8 @@ def cmd_monitor(args: argparse.Namespace) -> None:
     interval = getattr(args, "interval", 5)
 
     try:
-        from rich.live import Live
         from rich.layout import Layout
+        from rich.live import Live
         from rich.panel import Panel
 
         def _build_display():
@@ -778,15 +846,19 @@ def cmd_monitor(args: argparse.Namespace) -> None:
 
             # System panel
             sys_lines = []
-            sys_lines.append(f"CPU: {sys_snap.get('cpu_percent', 0):.1f}%  |  "
-                             f"Memory: {sys_snap.get('memory_used_mb', 0):.0f}/{sys_snap.get('memory_total_mb', 0):.0f} MB ({sys_snap.get('memory_percent', 0):.1f}%)  |  "
-                             f"Process: {sys_snap.get('process_memory_mb', 0):.1f} MB")
+            sys_lines.append(
+                f"CPU: {sys_snap.get('cpu_percent', 0):.1f}%  |  "
+                f"Memory: {sys_snap.get('memory_used_mb', 0):.0f}/{sys_snap.get('memory_total_mb', 0):.0f} MB ({sys_snap.get('memory_percent', 0):.1f}%)  |  "
+                f"Process: {sys_snap.get('process_memory_mb', 0):.1f} MB"
+            )
             uptime = sys_snap.get("daemon_uptime_seconds", 0)
             h, rem = divmod(int(uptime), 3600)
             m = rem // 60
-            sys_lines.append(f"Uptime: {h}h {m}m  |  "
-                             f"Connections: {sys_snap.get('active_connections', 0)}  |  "
-                             f"RPC Calls: {sys_snap.get('total_rpc_calls', 0)}")
+            sys_lines.append(
+                f"Uptime: {h}h {m}m  |  "
+                f"Connections: {sys_snap.get('active_connections', 0)}  |  "
+                f"RPC Calls: {sys_snap.get('total_rpc_calls', 0)}"
+            )
             sys_panel = Panel("\n".join(sys_lines), title="System", border_style="cyan")
 
             # Indexing panel
@@ -856,6 +928,7 @@ def cmd_monitor(args: argparse.Namespace) -> None:
 # Argument parser
 # -----------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rag-kb",
@@ -896,7 +969,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("index", help="Index documents into a RAG")
     p.add_argument("--rag", default=None, help="RAG name (defaults to active)")
     p.add_argument("--full", action="store_true", help="Full rebuild (clear and re-index)")
-    p.add_argument("--workers", type=int, default=None, help="Number of parallel parsing workers (default: from config)")
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of parallel parsing workers (default: from config)",
+    )
 
     # cancel-index
     sub.add_parser("cancel-index", help="Cancel a running indexing operation")
@@ -949,22 +1027,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     # download-models
     p = sub.add_parser("download-models", help="Pre-download ML models for offline/bundled use")
-    p.add_argument("--output", "-o", default=None, help="Output directory (default: models/ in project root)")
-    p.add_argument("--model", default=None, help="Specific model name to download (default: all default models)")
+    p.add_argument(
+        "--output", "-o", default=None, help="Output directory (default: models/ in project root)"
+    )
+    p.add_argument(
+        "--model",
+        default=None,
+        help="Specific model name to download (default: all default models)",
+    )
 
     # models
     p = sub.add_parser("models", help="Manage embedding and reranker models")
     models_sub = p.add_subparsers(dest="models_action", help="Model management commands")
 
     mp = models_sub.add_parser("list", help="List all available models with status")
-    mp.add_argument("--type", choices=["embedding", "reranker"], default=None, help="Filter by model type")
+    mp.add_argument(
+        "--type", choices=["embedding", "reranker"], default=None, help="Filter by model type"
+    )
 
     mp = models_sub.add_parser("info", help="Show detailed info about a model")
     mp.add_argument("model_name", help="Model name (e.g. BAAI/bge-m3)")
 
     mp = models_sub.add_parser("download", help="Download a model for local use")
     mp.add_argument("model_name", help="Model name to download")
-    mp.add_argument("--trust", action="store_true", help="Trust remote code (required for some models)")
+    mp.add_argument(
+        "--trust", action="store_true", help="Trust remote code (required for some models)"
+    )
 
     mp = models_sub.add_parser("delete", help="Delete a downloaded model")
     mp.add_argument("model_name", help="Model name to delete")
@@ -980,18 +1068,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     lp = daemon_sub.add_parser("logs", help="Show daemon logs (like docker logs)")
     lp.add_argument("-f", "--follow", action="store_true", help="Follow log output (like tail -f)")
-    lp.add_argument("-n", "--tail", type=int, default=50, help="Number of lines to show from the end (default: 50, 0 = all)")
+    lp.add_argument(
+        "-n",
+        "--tail",
+        type=int,
+        default=50,
+        help="Number of lines to show from the end (default: 50, 0 = all)",
+    )
 
     # stats
     p = sub.add_parser("stats", help="Show detailed metrics and monitoring statistics")
-    p.add_argument("category", nargs="?", default="all",
-                   choices=["all", "dashboard", "indexing", "search", "embedding", "vector"],
-                   help="Which category to show (default: all)")
-    p.add_argument("--limit", "-n", type=int, default=10, help="Number of history items (default: 10)")
+    p.add_argument(
+        "category",
+        nargs="?",
+        default="all",
+        choices=["all", "dashboard", "indexing", "search", "embedding", "vector"],
+        help="Which category to show (default: all)",
+    )
+    p.add_argument(
+        "--limit", "-n", type=int, default=10, help="Number of history items (default: 10)"
+    )
 
     # monitor
     p = sub.add_parser("monitor", help="Live monitoring dashboard (like htop for RAG)")
-    p.add_argument("--interval", "-i", type=int, default=5, help="Refresh interval in seconds (default: 5)")
+    p.add_argument(
+        "--interval", "-i", type=int, default=5, help="Refresh interval in seconds (default: 5)"
+    )
 
     return parser
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 _RE_ERRORS = re.compile(r"\b(?:ERROR|FATAL|CRITICAL)\b", re.IGNORECASE)
 _RE_WARNINGS = re.compile(r"\bWARN(?:ING)?\b", re.IGNORECASE)

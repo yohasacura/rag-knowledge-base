@@ -17,13 +17,13 @@ Design decisions
 from __future__ import annotations
 
 import functools
-import gc
 import logging
 import os
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -32,14 +32,21 @@ from rag_kb.config import (
     RagEntry,
     RagRegistry,
     safe_display_path,
-    CONFIG_PATH,
-    DATA_DIR,
 )
 from rag_kb.embedder import embed_query
-from rag_kb.indexer import Indexer, IndexingState, IndexingCancelledError
-from rag_kb.search import bm25_search, hybrid_fuse_scores, mmr_diversify, rerank_cross_encoder
-from rag_kb.sharing import export_rag as _sharing_export, import_rag as _sharing_import, peek_rag_file
-from rag_kb.vector_store import SearchResult, VectorStore, StoreStats
+from rag_kb.file_manifest import FileManifest
+from rag_kb.indexer import Indexer, IndexingState
+from rag_kb.search import (
+    bm25_search,
+    get_bm25_cache,
+    hybrid_fuse_scores,
+    mmr_diversify,
+    rerank_cross_encoder,
+)
+from rag_kb.sharing import export_rag as _sharing_export
+from rag_kb.sharing import import_rag as _sharing_import
+from rag_kb.sharing import peek_rag_file
+from rag_kb.vector_store import SearchResult, VectorStore
 from rag_kb.watcher import FolderWatcher
 
 logger = logging.getLogger(__name__)
@@ -71,13 +78,14 @@ def _locked(method):
 # Result dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class SearchResultItem:
     """A single search hit returned by :pymeth:`RagKnowledgeBaseAPI.search`."""
 
     text: str
-    source_file: str            # display path (relative to source folders)
-    score: float                # 0.0 – 1.0
+    source_file: str  # display path (relative to source folders)
+    score: float  # 0.0 – 1.0
     chunk_index: int
     metadata: dict[str, str] = field(default_factory=dict)
 
@@ -101,7 +109,7 @@ class IndexStatus:
 class FileInfo:
     """One file in the index."""
 
-    file: str       # display path
+    file: str  # display path
     chunk_count: int
 
 
@@ -110,10 +118,10 @@ class PaginatedFileList:
     """Paginated result from :pymeth:`RagKnowledgeBaseAPI.list_indexed_files`."""
 
     files: list[FileInfo]
-    total: int          # total matching files
+    total: int  # total matching files
     offset: int = 0
     limit: int = 100
-    filter: str = ""    # the filter that was applied (if any)
+    filter: str = ""  # the filter that was applied (if any)
 
 
 @dataclass
@@ -138,6 +146,7 @@ class FileChanges:
 # Unified API
 # ---------------------------------------------------------------------------
 
+
 class RagKnowledgeBaseAPI:
     """Single point of management for all RAG operations.
 
@@ -151,12 +160,13 @@ class RagKnowledgeBaseAPI:
     ) -> None:
         self.settings: AppSettings = settings or AppSettings.load()
         self.registry: RagRegistry = registry or RagRegistry()
-        self._stores: dict[str, VectorStore] = {}   # norm(db_path) → store
+        self._stores: dict[str, VectorStore] = {}  # norm(db_path) → store
         self._watcher: FolderWatcher | None = None
         self._last_index_state: IndexingState | None = None
         self._lock = threading.RLock()
         self._current_indexer: Indexer | None = None
         self._indexer_lock = threading.Lock()  # guards _current_indexer only
+        self._indexing_rags: set[str] = set()  # RAG names currently being indexed
 
     # -- internal helpers ---------------------------------------------------
 
@@ -267,7 +277,7 @@ class RagKnowledgeBaseAPI:
         self.registry.set_active(name)
 
         # Close old store and watcher
-        old_active = self.registry.get_active()  # just set it, so it's name
+        self.registry.get_active()  # just set it, so it's name
         # Close all stores for safety — the new active will be re-opened lazily
         with self._lock:
             if self._watcher is not None:
@@ -290,6 +300,14 @@ class RagKnowledgeBaseAPI:
         """
         logger.info("Deleting RAG '%s'", name)
         entry = self.registry.get_rag(name)  # validate exists
+
+        # WS2: Refuse to delete a RAG that is currently being indexed
+        if name in self._indexing_rags:
+            raise RuntimeError(
+                f"RAG '{name}' is currently being indexed. "
+                f"Cancel indexing first before deleting."
+            )
+
         active = self.registry.get_active()
         is_active = active is not None and active.name == name
 
@@ -306,18 +324,8 @@ class RagKnowledgeBaseAPI:
         # Close any FileManifest SQLite connection(s) pointing into the
         # RAG's data directory so their WAL/SHM files are released.
         from rag_kb.file_manifest import FileManifest as _FM
-        manifest_db = os.path.join(entry.db_path, "file_manifest.db")
-        norm_manifest = os.path.normcase(os.path.normpath(manifest_db))
-        for obj in gc.get_objects():
-            try:
-                if isinstance(obj, _FM):
-                    obj_path = os.path.normcase(os.path.normpath(getattr(obj, "_db_path", "")))
-                    if obj_path == norm_manifest:
-                        obj.close()
-            except Exception:  # noqa: BLE001
-                pass
 
-        gc.collect()
+        _FM.close_for_path(entry.db_path)
 
         result = self.registry.delete_rag(name)
         logger.info("RAG '%s' deleted (immediate_cleanup=%s)", name, result)
@@ -369,7 +377,6 @@ class RagKnowledgeBaseAPI:
     # Search
     # ======================================================================
 
-    @_locked
     def search(
         self,
         query: str,
@@ -381,20 +388,32 @@ class RagKnowledgeBaseAPI:
         (or specified) RAG.
 
         Returns a list of ``SearchResultItem`` ordered by relevance.
-        """
-        if rag_name:
-            entry = self.registry.get_rag(rag_name)
-        else:
-            entry = self._ensure_active()
 
-        store = self._ensure_store(entry)
-        settings = self.settings
+        Thread safety
+        -------------
+        The lock is held only for the short snapshot phase (registry lookup,
+        store resolution, settings copy).  The heavy search pipeline (embed,
+        vector search, BM25, rerank, MMR) runs **outside** the lock so that
+        concurrent searches and indexing are not serialised.
+        """
+        # --- snapshot under lock -------------------------------------------
+        with self._lock:
+            if rag_name:
+                entry = self.registry.get_rag(rag_name)
+            else:
+                entry = self._ensure_active()
+
+            store = self._ensure_store(entry)
+            settings = self.settings.model_copy()  # snapshot settings
+
+        # --- search pipeline (no lock held) --------------------------------
 
         if store.count() == 0:
             logger.debug("Search aborted: store is empty for RAG '%s'", entry.name)
             return []
 
         import time as _time
+
         _t_search_start = _time.perf_counter()
         _t_vec = 0.0
         _t_bm25 = 0.0
@@ -403,7 +422,13 @@ class RagKnowledgeBaseAPI:
 
         # -- Fetch candidates --
         fetch_k = max(n_results * 4, 20)
-        logger.debug("Search: query=%r n_results=%d fetch_k=%d rag=%s", query[:80], n_results, fetch_k, entry.name)
+        logger.debug(
+            "Search: query=%r n_results=%d fetch_k=%d rag=%s",
+            query[:80],
+            n_results,
+            fetch_k,
+            entry.name,
+        )
         _t0 = _time.perf_counter()
         query_emb = embed_query(query, model_name=entry.embedding_model)
         vec_results = store.search(
@@ -422,21 +447,30 @@ class RagKnowledgeBaseAPI:
         if settings.hybrid_search_enabled:
             _t0 = _time.perf_counter()
             try:
-                all_ids, all_texts, all_metas = store.get_all_documents()
-                if all_texts:
-                    bm25_hits = bm25_search(query, all_texts, all_ids, top_k=fetch_k)
+                doc_count = store.count()
+                bm25_cache = get_bm25_cache()
+                bm25_model, all_ids, all_texts, all_metas = bm25_cache.get_or_build(
+                    rag_name=entry.name,
+                    doc_count=doc_count,
+                    fetch_fn=store.get_all_documents,
+                )
+                if all_texts and bm25_model is not None:
+                    bm25_hits = bm25_search(
+                        query, all_texts, all_ids, top_k=fetch_k, bm25_index=bm25_model
+                    )
                     vec_scores = {
                         r.source_file + "::chunk_" + str(r.chunk_index): r.score
                         for r in vec_results
                     }
-                    bm25_scores_map = {hit_id: score for hit_id, score in bm25_hits}
+                    bm25_scores_map = dict(bm25_hits)
                     fused = hybrid_fuse_scores(
-                        vec_scores, bm25_scores_map, alpha=settings.hybrid_search_alpha,
+                        vec_scores,
+                        bm25_scores_map,
+                        alpha=settings.hybrid_search_alpha,
                     )
 
                     all_results_map = {
-                        r.source_file + "::chunk_" + str(r.chunk_index): r
-                        for r in vec_results
+                        r.source_file + "::chunk_" + str(r.chunk_index): r for r in vec_results
                     }
                     id_to_idx = {doc_id: i for i, doc_id in enumerate(all_ids)}
                     for hit_id, _ in bm25_hits:
@@ -454,7 +488,9 @@ class RagKnowledgeBaseAPI:
                         if key in all_results_map:
                             all_results_map[key].score = score
                     vec_results = sorted(
-                        all_results_map.values(), key=lambda r: r.score, reverse=True,
+                        all_results_map.values(),
+                        key=lambda r: r.score,
+                        reverse=True,
                     )[:fetch_k]
             except Exception as exc:
                 logger.warning("BM25 hybrid search failed, falling back to vector only: %s", exc)
@@ -465,11 +501,9 @@ class RagKnowledgeBaseAPI:
             missing = [r for r in vec_results if r.embedding is None]
             if missing:
                 try:
-                    ids_needed = [
-                        r.source_file + "::chunk_" + str(r.chunk_index) for r in missing
-                    ]
+                    ids_needed = [r.source_file + "::chunk_" + str(r.chunk_index) for r in missing]
                     emb_map = store.get_embeddings_by_ids(ids_needed)
-                    for r, doc_id in zip(missing, ids_needed):
+                    for r, doc_id in zip(missing, ids_needed, strict=False):
                         if doc_id in emb_map:
                             r.embedding = emb_map[doc_id]
                 except Exception as exc:
@@ -482,11 +516,13 @@ class RagKnowledgeBaseAPI:
                 texts_for_rerank = [r.text for r in vec_results]
                 scores_for_rerank = [r.score for r in vec_results]
                 reranked = rerank_cross_encoder(
-                    query, texts_for_rerank, scores_for_rerank,
+                    query,
+                    texts_for_rerank,
+                    scores_for_rerank,
                     model_name=settings.reranker_model,
                 )
                 reordered = [vec_results[idx] for idx, _ in reranked]
-                for res, (_, new_score) in zip(reordered, reranked):
+                for res, (_, new_score) in zip(reordered, reranked, strict=False):
                     res.score = new_score
                 vec_results = reordered
             except Exception as exc:
@@ -529,28 +565,35 @@ class RagKnowledgeBaseAPI:
 
         # -- Record search metrics (best-effort) --
         try:
-            from rag_kb.metrics import SearchQueryMetrics, MetricsCollector
+            from rag_kb.metrics import MetricsCollector, SearchQueryMetrics
+
             top_sc = max((r.score for r in final_results), default=0.0)
             min_sc = min((r.score for r in final_results), default=0.0)
-            MetricsCollector.get().record_search_query(SearchQueryMetrics(
-                rag_name=entry.name,
-                timestamp=_time.time(),
-                query_length=len(query),
-                top_k=n_results,
-                results_returned=len(final_results),
-                total_duration_ms=round(_t_total, 2),
-                vector_search_ms=round(_t_vec, 2),
-                bm25_ms=round(_t_bm25, 2),
-                rerank_ms=round(_t_rerank, 2),
-                mmr_ms=round(_t_mmr, 2),
-                top_score=round(top_sc, 4),
-                min_score=round(min_sc, 4),
-            ))
+            MetricsCollector.get().record_search_query(
+                SearchQueryMetrics(
+                    rag_name=entry.name,
+                    timestamp=_time.time(),
+                    query_length=len(query),
+                    top_k=n_results,
+                    results_returned=len(final_results),
+                    total_duration_ms=round(_t_total, 2),
+                    vector_search_ms=round(_t_vec, 2),
+                    bm25_ms=round(_t_bm25, 2),
+                    rerank_ms=round(_t_rerank, 2),
+                    mmr_ms=round(_t_mmr, 2),
+                    top_score=round(top_sc, 4),
+                    min_score=round(min_sc, 4),
+                )
+            )
         except Exception:
             pass
 
         # -- Convert to public dataclass --
-        logger.debug("Search returning %d results (after min_score=%.3f filter)", len(final_results), effective_min)
+        logger.debug(
+            "Search returning %d results (after min_score=%.3f filter)",
+            len(final_results),
+            effective_min,
+        )
         return [
             SearchResultItem(
                 text=r.text,
@@ -603,20 +646,36 @@ class RagKnowledgeBaseAPI:
             entry = self.registry.get_rag(rag_name) if rag_name else self._ensure_active()
             logger.info(
                 "Starting index pipeline: rag='%s' full=%s workers=%s",
-                entry.name, full, workers,
+                entry.name,
+                full,
+                workers,
             )
 
             if entry.detached:
                 raise RuntimeError(
-                    f"RAG '{entry.name}' is detached (read-only). "
-                    f"Use attach to re-enable indexing."
+                    f"RAG '{entry.name}' is detached (read-only). Use attach to re-enable indexing."
                 )
             if entry.is_imported and not entry.source_folders:
                 raise RuntimeError("Cannot index an imported RAG with no source folders.")
 
+            # WS2: Per-RAG indexing guard — reject concurrent index on same RAG
+            if entry.name in self._indexing_rags:
+                raise RuntimeError(
+                    f"RAG '{entry.name}' is already being indexed. "
+                    f"Wait for the current indexing to finish or cancel it first."
+                )
+            self._indexing_rags.add(entry.name)
+
             settings = self.settings.model_copy()  # always copy — safe snapshot
             if workers is not None:
                 settings.indexing_workers = workers
+
+            # WS3: Stop watcher during indexing to avoid the watcher's
+            # fallback Indexer from creating a second VectorStore/FileManifest
+            # that would conflict with the active indexer.
+            if self._watcher is not None:
+                self._watcher.stop()
+                self._watcher = None
 
             # Evict cached store before indexing (Indexer creates its own)
             self._close_store(entry.db_path)
@@ -624,7 +683,9 @@ class RagKnowledgeBaseAPI:
         # --- long-running work (no lock held) ------------------------------
         cancel_event = threading.Event()
         indexer = Indexer(
-            entry, self.registry, settings,
+            entry,
+            self.registry,
+            settings,
             on_progress=on_progress,
             cancel_event=cancel_event,
         )
@@ -637,11 +698,18 @@ class RagKnowledgeBaseAPI:
             with self._indexer_lock:
                 self._current_indexer = None
             indexer.close()
+            # Always release the per-RAG guard
+            with self._lock:
+                self._indexing_rags.discard(entry.name)
 
         logger.info(
             "Index pipeline finished: rag='%s' status=%s files=%d chunks=%d duration=%.1fs errors=%d",
-            entry.name, state.status, state.processed_files,
-            state.total_chunks, state.duration_seconds, len(state.errors),
+            entry.name,
+            state.status,
+            state.processed_files,
+            state.total_chunks,
+            state.duration_seconds,
+            len(state.errors),
         )
 
         # --- bookkeeping under lock ----------------------------------------
@@ -650,6 +718,12 @@ class RagKnowledgeBaseAPI:
             # Refresh store reference (index may have rebuilt the DB)
             self._close_store(entry.db_path)
             self._get_store(entry)
+
+        # Invalidate BM25 cache — corpus has changed
+        get_bm25_cache().invalidate()
+
+        # WS3: Restart watcher after indexing completes
+        self._sync_watcher(entry)
 
         return state
 
@@ -686,8 +760,21 @@ class RagKnowledgeBaseAPI:
     # ======================================================================
 
     @_locked
-    def get_index_status(self, rag_name: str | None = None) -> IndexStatus:
-        """Return structured status for the active (or specified) RAG."""
+    def get_index_status(
+        self,
+        rag_name: str | None = None,
+        *,
+        skip_store_stats: bool = False,
+    ) -> IndexStatus:
+        """Return structured status for the active (or specified) RAG.
+
+        Parameters
+        ----------
+        skip_store_stats : bool
+            When *True*, skip the (expensive) ``store.get_stats()`` call.
+            Useful when the caller only needs the live indexing progress
+            and doesn't need up-to-date file/chunk counts from the store.
+        """
         if rag_name:
             entry = self.registry.get_rag(rag_name)
         else:
@@ -698,16 +785,24 @@ class RagKnowledgeBaseAPI:
             is_imported=entry.is_imported if entry else None,
         )
 
-        if entry:
-            store = self._get_store(entry)
-            if store:
-                try:
-                    stats = store.get_stats()
-                    status.total_files = stats.total_files
-                    status.total_chunks = stats.total_chunks
-                except Exception:
-                    # Collection may be temporarily deleted during a full reindex
-                    pass
+        if entry and not skip_store_stats:
+            # Fast path: read cached stats from file_manifest.db (SQLite)
+            # — no ChromaDB queries, ~0ms.
+            manifest_db = os.path.join(entry.db_path, "file_manifest.db")
+            cached = FileManifest.read_cached_stats(manifest_db)
+            if cached is not None:
+                status.total_files, status.total_chunks = cached
+            else:
+                # Fallback for RAGs that haven't been indexed yet
+                # after this code was deployed (e.g. imported RAGs).
+                store = self._get_store(entry)
+                if store:
+                    try:
+                        stats = store.get_stats_fast()
+                        status.total_files = stats.total_files
+                        status.total_chunks = stats.total_chunks
+                    except Exception:
+                        pass
 
         if self._last_index_state:
             status.last_status = self._last_index_state.status
@@ -802,7 +897,9 @@ class RagKnowledgeBaseAPI:
 
     @_locked
     def get_document_content(
-        self, file_path: str, rag_name: str | None = None,
+        self,
+        file_path: str,
+        rag_name: str | None = None,
     ) -> list[ChunkInfo]:
         """Retrieve all indexed chunks from a specific document.
 
@@ -819,7 +916,10 @@ class RagKnowledgeBaseAPI:
         # Try direct lookup (absolute path)
         items = store.get_by_source(file_path)
         if items:
-            return [ChunkInfo(id=it["id"], text=it["text"], metadata=it.get("metadata", {})) for it in items]
+            return [
+                ChunkInfo(id=it["id"], text=it["text"], metadata=it.get("metadata", {}))
+                for it in items
+            ]
 
         # Reverse-resolve display path → absolute path
         folders = entry.source_folders
@@ -829,7 +929,10 @@ class RagKnowledgeBaseAPI:
             display = safe_display_path(stored, folders)
             if display.replace("\\", "/").lower() == norm_input:
                 items = store.get_by_source(stored)
-                return [ChunkInfo(id=it["id"], text=it["text"], metadata=it.get("metadata", {})) for it in items]
+                return [
+                    ChunkInfo(id=it["id"], text=it["text"], metadata=it.get("metadata", {}))
+                    for it in items
+                ]
 
         return []
 
@@ -875,10 +978,7 @@ class RagKnowledgeBaseAPI:
         new_files = sorted(source_set - indexed_set)
         removed_files = sorted(indexed_set - source_set)
 
-        modified_files: list[str] = []
-        for fp in sorted(source_set & indexed_set):
-            if manifest.is_changed(fp):
-                modified_files.append(fp)
+        modified_files = [fp for fp in sorted(source_set & indexed_set) if manifest.is_changed(fp)]
 
         manifest.close()
 
@@ -1050,7 +1150,7 @@ class RagKnowledgeBaseAPI:
         list[Path]
             Paths to the saved model directories.
         """
-        from rag_kb.models import download_models, DEFAULT_MODELS, BUNDLED_MODELS_DIR
+        from rag_kb.models import BUNDLED_MODELS_DIR, DEFAULT_MODELS, download_models
 
         out = Path(output_dir) if output_dir else BUNDLED_MODELS_DIR
         if model_name:
@@ -1075,6 +1175,7 @@ class RagKnowledgeBaseAPI:
             Filter by ``"embedding"`` or ``"reranker"``.  None = all.
         """
         from rag_kb.models import get_all_models_with_status
+
         all_models = get_all_models_with_status()
         if model_type:
             all_models = [m for m in all_models if m["type"] == model_type]
@@ -1082,7 +1183,8 @@ class RagKnowledgeBaseAPI:
 
     def get_model_info(self, model_name: str) -> dict[str, Any] | None:
         """Return detailed info for a single model."""
-        from rag_kb.models import get_model_spec, get_model_status, get_model_disk_size
+        from rag_kb.models import get_model_disk_size, get_model_spec, get_model_status
+
         spec = get_model_spec(model_name)
         if spec is None:
             return None
@@ -1090,9 +1192,16 @@ class RagKnowledgeBaseAPI:
         status = get_model_status(model_name)
         d["status"] = status.value
         from rag_kb.models import ModelStatus
-        d["disk_size_bytes"] = get_model_disk_size(model_name) if status in (
-            ModelStatus.bundled, ModelStatus.downloaded,
-        ) else 0
+
+        d["disk_size_bytes"] = (
+            get_model_disk_size(model_name)
+            if status
+            in (
+                ModelStatus.bundled,
+                ModelStatus.downloaded,
+            )
+            else 0
+        )
         return d
 
     def download_model(
@@ -1128,6 +1237,7 @@ class RagKnowledgeBaseAPI:
     def delete_model(self, model_name: str) -> bool:
         """Delete a downloaded model."""
         from rag_kb.models import delete_downloaded_model
+
         return delete_downloaded_model(model_name)
 
     def trust_model(self, model_name: str) -> None:

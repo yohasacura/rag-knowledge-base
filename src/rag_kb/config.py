@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import os
 import platform
 import shutil
-import gc
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -21,62 +22,33 @@ logger = logging.getLogger(__name__)
 
 
 def _close_chroma_for_path(db_path: str) -> None:
-    """Best-effort: forcefully close any in-process ChromaDB client pointing at *db_path*.
+    """Close any in-process ChromaDB client pointing at *db_path*.
 
-    Walks the GC graph to find VectorStore, PersistentClient and
-    FileManifest instances whose path falls under *db_path*, then:
-      1. Closes FileManifest SQLite connections (releases WAL/SHM locks)
-      2. Deletes the Rust bindings (releases memory-mapped HNSW files)
-      3. Stops the ChromaDB system
-      4. Clears the singleton cache
+    Uses the VectorStoreRegistry for clean lifecycle management.
+    Also closes FileManifest SQLite connections under the given path.
     """
     try:
-        from rag_kb.vector_store import VectorStore  # local to avoid circular
-        from rag_kb.file_manifest import FileManifest
-        import chromadb
-        norm = os.path.normcase(os.path.normpath(db_path))
+        from rag_kb.vector_store import get_store_registry
 
+        registry = get_store_registry()
+        registry.close_for_path(db_path)
+    except Exception:
+        pass
+
+    try:
+        from rag_kb.file_manifest import FileManifest
+
+        norm = os.path.normcase(os.path.normpath(db_path))
+        # Best-effort: walk GC only for FileManifest (lightweight, few instances)
         for obj in gc.get_objects():
-            # Close FileManifest SQLite connections whose db file lives
-            # under the target path (e.g. <rag_dir>/chroma_db/file_manifest.db)
             try:
                 if isinstance(obj, FileManifest):
-                    manifest_path = os.path.normcase(
-                        os.path.normpath(getattr(obj, "_db_path", ""))
-                    )
+                    manifest_path = os.path.normcase(os.path.normpath(getattr(obj, "_db_path", "")))
                     if manifest_path.startswith(norm):
                         obj.close()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
-            try:
-                if isinstance(obj, VectorStore):
-                    obj_path = os.path.normcase(os.path.normpath(getattr(obj, "_db_path", "")))
-                    if obj_path == norm:
-                        obj.close(force=True)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                if isinstance(obj, chromadb.PersistentClient):
-                    ident = getattr(obj, "_identifier", "") or ""
-                    sys_path = str(getattr(getattr(obj, "_system", None), "_db_path", "") or "")
-                    for candidate in (ident, sys_path):
-                        if candidate and os.path.normcase(os.path.normpath(candidate)) == norm:
-                            # Delete Rust bindings to release mmap'd files
-                            server = getattr(obj, "_server", None)
-                            if server is not None and hasattr(server, "bindings"):
-                                del server.bindings
-                            system = getattr(obj, "_system", None)
-                            if system is not None:
-                                try:
-                                    system.stop()
-                                except Exception:
-                                    pass
-                            if hasattr(obj, "clear_system_cache"):
-                                obj.clear_system_cache()
-                            break
-            except Exception:  # noqa: BLE001
-                pass
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -111,9 +83,11 @@ def _rmtree_with_retries(path: Path, retries: int = 8, delay: float = 0.3) -> No
     if last_exc:
         raise last_exc
 
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
+
 
 def _default_data_dir() -> Path:
     """Return the platform-appropriate data directory."""
@@ -140,7 +114,7 @@ RAGS_DIR: Path = DATA_DIR / "rags"
 
 # Import the definitive extension list built from all registered parsers
 # so that file discovery automatically covers every format the app can handle.
-from rag_kb.parsers.registry import SUPPORTED_EXTENSIONS as _ALL_PARSER_EXTENSIONS
+from rag_kb.parsers.registry import SUPPORTED_EXTENSIONS as _ALL_PARSER_EXTENSIONS  # noqa: E402
 
 _DEFAULT_EXTENSIONS: list[str] = list(_ALL_PARSER_EXTENSIONS)
 
@@ -159,18 +133,18 @@ class AppSettings(BaseModel):
     reranking_enabled: bool = True
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     hybrid_search_enabled: bool = True
-    hybrid_search_alpha: float = 0.7      # 0 = all BM25, 1 = all vector
+    hybrid_search_alpha: float = 0.7  # 0 = all BM25, 1 = all vector
     min_score_threshold: float = 0.15
     mmr_enabled: bool = True
-    mmr_lambda: float = 0.7               # 0 = max diversity, 1 = max relevance
+    mmr_lambda: float = 0.7  # 0 = max diversity, 1 = max relevance
 
     # Indexing performance settings
-    indexing_workers: int = 0              # 0 = auto (min(cpu_count, 8))
-    embedding_batch_size: int = 256        # texts per encode() call
+    indexing_workers: int = 14             # parallel parsing workers (0 = auto)
+    embedding_batch_size: int = 512        # texts per encode() call
 
     # ChromaDB HNSW tuning
-    hnsw_ef_construction: int = 200
-    hnsw_m: int = 32
+    hnsw_ef_construction: int = 256
+    hnsw_m: int = 48
 
     # Model management
     trusted_models: list[str] = Field(
@@ -178,9 +152,20 @@ class AppSettings(BaseModel):
         description="Models the user has consented to run with trust_remote_code=True",
     )
 
-    # API keys (stored in config.yaml — NOT committed to version control)
+    # API keys — prefer environment variables over config.yaml values.
+    # Set RAG_KB_OPENAI_API_KEY / RAG_KB_VOYAGE_API_KEY in your environment.
     openai_api_key: str = ""
     voyage_api_key: str = ""
+
+    # ------------------------------------------------------------------
+
+    def resolve_openai_api_key(self) -> str:
+        """Return the OpenAI API key, preferring env var over stored value."""
+        return os.environ.get("RAG_KB_OPENAI_API_KEY", "") or self.openai_api_key
+
+    def resolve_voyage_api_key(self) -> str:
+        """Return the Voyage API key, preferring env var over stored value."""
+        return os.environ.get("RAG_KB_VOYAGE_API_KEY", "") or self.voyage_api_key
 
     # ------------------------------------------------------------------
 
@@ -190,14 +175,31 @@ class AppSettings(BaseModel):
         # Don't persist supported_extensions — always derived from parsers
         data = self.model_dump()
         data.pop("supported_extensions", None)
-        with open(path, "w", encoding="utf-8") as fh:
-            yaml.safe_dump(data, fh, default_flow_style=False, sort_keys=False)
+        # Don't persist API keys if they come from environment variables
+        if os.environ.get("RAG_KB_OPENAI_API_KEY"):
+            data.pop("openai_api_key", None)
+        if os.environ.get("RAG_KB_VOYAGE_API_KEY"):
+            data.pop("voyage_api_key", None)
+        # Atomic write: write to temp file then os.replace()
+        fd, tmp = tempfile.mkstemp(
+            dir=str(path.parent), suffix=".tmp", prefix=".config_"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                yaml.safe_dump(data, fh, default_flow_style=False, sort_keys=False)
+            Path(tmp).replace(path)
+        except BaseException:
+            try:
+                Path(tmp).unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     @classmethod
-    def load(cls, path: Path | None = None) -> "AppSettings":
+    def load(cls, path: Path | None = None) -> AppSettings:
         path = path or CONFIG_PATH
         if path.exists():
-            with open(path, "r", encoding="utf-8") as fh:
+            with open(path, encoding="utf-8") as fh:
                 data = yaml.safe_load(fh) or {}
             # Remove stale saved extensions — always use parser registry
             data.pop("supported_extensions", None)
@@ -217,7 +219,7 @@ class RagEntry(BaseModel):
 
     name: str
     description: str = ""
-    db_path: str = ""          # absolute path to chroma_db dir
+    db_path: str = ""  # absolute path to chroma_db dir
     embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
     embedding_dimension: int = 0  # 0 = auto-detect from model registry
     source_folders: list[str] = Field(default_factory=list)
@@ -226,7 +228,7 @@ class RagEntry(BaseModel):
     imported_from: str = ""
     file_count: int = 0
     chunk_count: int = 0
-    detached: bool = False     # True → read-only, indexing/watcher disabled
+    detached: bool = False  # True → read-only, indexing/watcher disabled
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +251,7 @@ class RagRegistry:
 
     def _load(self) -> None:
         if self._path.exists():
-            with open(self._path, "r", encoding="utf-8") as fh:
+            with open(self._path, encoding="utf-8") as fh:
                 data: dict[str, Any] = json.load(fh)
             self._active = data.get("active")
             for name, entry_data in data.get("rags", {}).items():
@@ -271,8 +273,22 @@ class RagRegistry:
             }
             if self._pending_cleanups:
                 data["pending_cleanups"] = self._pending_cleanups
-            with open(self._path, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, indent=2, ensure_ascii=False)
+            # Atomic write: write to temp file then os.replace() so that
+            # a crash mid-write cannot corrupt the registry.
+            fd, tmp = tempfile.mkstemp(
+                dir=str(self._path.parent), suffix=".tmp", prefix=".registry_"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh, indent=2, ensure_ascii=False)
+                Path(tmp).replace(self._path)
+            except BaseException:
+                # Clean up the temp file on any failure
+                try:
+                    Path(tmp).unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
 
     def _add_pending_cleanup(self, dir_path: str) -> None:
         if dir_path not in self._pending_cleanups:
@@ -313,37 +329,40 @@ class RagRegistry:
         folders: list[str] | None = None,
         embedding_model: str | None = None,
     ) -> RagEntry:
-        if name in self._rags:
-            raise ValueError(f"RAG '{name}' already exists")
-        _validate_rag_name(name)
+        with self._file_lock:
+            if name in self._rags:
+                raise ValueError(f"RAG '{name}' already exists")
+            _validate_rag_name(name)
 
-        rag_dir = self._rags_dir / name / "chroma_db"
-        rag_dir.mkdir(parents=True, exist_ok=True)
+            rag_dir = self._rags_dir / name / "chroma_db"
+            rag_dir.mkdir(parents=True, exist_ok=True)
 
-        settings = AppSettings.load()
+            settings = AppSettings.load()
 
-        entry = RagEntry(
-            name=name,
-            description=description,
-            db_path=str(rag_dir),
-            embedding_model=embedding_model or settings.embedding_model,
-            source_folders=[str(Path(f).resolve()) for f in (folders or [])],
-            created_at=datetime.now(timezone.utc).isoformat(),
-        )
-        self._rags[name] = entry
-        if self._active is None:
-            self._active = name
-        self._save()
-        logger.info("Created RAG '%s' → %s", name, rag_dir)
-        return entry
+            entry = RagEntry(
+                name=name,
+                description=description,
+                db_path=str(rag_dir),
+                embedding_model=embedding_model or settings.embedding_model,
+                source_folders=[str(Path(f).resolve()) for f in (folders or [])],
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+            self._rags[name] = entry
+            if self._active is None:
+                self._active = name
+            self._save()
+            logger.info("Created RAG '%s' → %s", name, rag_dir)
+            return entry
 
     def list_rags(self) -> list[RagEntry]:
-        return list(self._rags.values())
+        with self._file_lock:
+            return list(self._rags.values())
 
     def get_rag(self, name: str) -> RagEntry:
-        if name not in self._rags:
-            raise KeyError(f"RAG '{name}' does not exist")
-        return self._rags[name]
+        with self._file_lock:
+            if name not in self._rags:
+                raise KeyError(f"RAG '{name}' does not exist")
+            return self._rags[name]
 
     def delete_rag(self, name: str) -> bool:
         """Delete a RAG from the registry and attempt to remove its data.
@@ -351,54 +370,60 @@ class RagRegistry:
         Returns ``True`` if all data was removed immediately, ``False`` if
         file cleanup was deferred (e.g. another process holds the files open).
         """
-        if name not in self._rags:
-            raise KeyError(f"RAG '{name}' does not exist")
-        rag_dir = self._rags_dir / name
+        with self._file_lock:
+            if name not in self._rags:
+                raise KeyError(f"RAG '{name}' does not exist")
+            rag_dir = self._rags_dir / name
 
-        # Phase 1: Remove the registry entry and persist immediately
-        # so the RAG disappears from the UI even if file deletion fails.
-        del self._rags[name]
-        if self._active == name:
-            self._active = next(iter(self._rags), None)
-        self._save()
-        logger.info("Deleted RAG '%s' from registry", name)
+            # Phase 1: Remove the registry entry and persist immediately
+            # so the RAG disappears from the UI even if file deletion fails.
+            del self._rags[name]
+            if self._active == name:
+                self._active = next(iter(self._rags), None)
+            self._save()
+            logger.info("Deleted RAG '%s' from registry", name)
 
         # Phase 2: Try to delete the data directory.  If the files are
         # locked (common on Windows with ChromaDB memory-mapped files),
         # record the path for deferred cleanup on next startup / exit.
+        # Done OUTSIDE the lock — filesystem ops can be slow.
         if rag_dir.exists():
             try:
                 _rmtree_with_retries(rag_dir)
                 logger.info("Removed data directory for '%s'", name)
             except (PermissionError, OSError) as exc:
                 logger.warning(
-                    "Could not remove data directory %s now (%s); "
-                    "scheduled for deferred cleanup.",
-                    rag_dir, exc,
+                    "Could not remove data directory %s now (%s); scheduled for deferred cleanup.",
+                    rag_dir,
+                    exc,
                 )
                 self._add_pending_cleanup(str(rag_dir))
                 return False
         return True
 
     def update_rag(self, entry: RagEntry) -> None:
-        self._rags[entry.name] = entry
-        self._save()
+        with self._file_lock:
+            self._rags[entry.name] = entry
+            self._save()
 
     # -- active RAG ---------------------------------------------------------
 
     def set_active(self, name: str) -> None:
-        if name not in self._rags:
-            raise KeyError(f"RAG '{name}' does not exist")
-        self._active = name
-        self._save()
+        with self._file_lock:
+            if name not in self._rags:
+                raise KeyError(f"RAG '{name}' does not exist")
+            self._active = name
+            self._save()
 
     def get_active_name(self) -> str | None:
-        return self._active
+        with self._file_lock:
+            return self._active
 
     def get_active(self) -> RagEntry | None:
-        if self._active and self._active in self._rags:
-            return self._rags[self._active]
-        return None
+        with self._file_lock:
+            if self._active and self._active in self._rags:
+                return self._rags[self._active]
+            return None
 
     # -- import helper ------------------------------------------------------
 
@@ -412,33 +437,35 @@ class RagRegistry:
         file_count: int = 0,
         chunk_count: int = 0,
     ) -> RagEntry:
-        if name in self._rags:
-            raise ValueError(f"RAG '{name}' already exists — use a different name")
-        _validate_rag_name(name)
+        with self._file_lock:
+            if name in self._rags:
+                raise ValueError(f"RAG '{name}' already exists — use a different name")
+            _validate_rag_name(name)
 
-        entry = RagEntry(
-            name=name,
-            description=description,
-            db_path=db_path,
-            embedding_model=embedding_model,
-            source_folders=[],
-            created_at=datetime.now(timezone.utc).isoformat(),
-            is_imported=True,
-            imported_from=imported_from,
-            file_count=file_count,
-            chunk_count=chunk_count,
-        )
-        self._rags[name] = entry
-        if self._active is None:
-            self._active = name
-        self._save()
-        logger.info("Registered imported RAG '%s' from %s", name, imported_from)
-        return entry
+            entry = RagEntry(
+                name=name,
+                description=description,
+                db_path=db_path,
+                embedding_model=embedding_model,
+                source_folders=[],
+                created_at=datetime.now(timezone.utc).isoformat(),
+                is_imported=True,
+                imported_from=imported_from,
+                file_count=file_count,
+                chunk_count=chunk_count,
+            )
+            self._rags[name] = entry
+            if self._active is None:
+                self._active = name
+            self._save()
+            logger.info("Registered imported RAG '%s' from %s", name, imported_from)
+            return entry
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _validate_rag_name(name: str) -> None:
     if not name or not name.strip():

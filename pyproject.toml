@@ -25,39 +25,55 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
+
+# ── Core dependencies (always installed) ──────────────────────────────────
 dependencies = [
-    "mcp[cli]>=1.0.0",
     "chromadb>=0.4.0",
     "sentence-transformers>=2.2.0",
-    "nicegui>=2.0.0",
-    "pypdf>=3.0.0",
-    "python-docx>=1.0.0",
-    "python-pptx>=0.6.21",
     "beautifulsoup4>=4.12.0",
     "lxml>=4.9.0",
     "watchdog>=3.0.0",
     "pyyaml>=6.0",
-    "openpyxl>=3.1.0",
-    "striprtf>=0.0.26",
     "rich>=13.0.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
+    "xxhash>=3.0.0",
+    "rank-bm25>=0.2.2",
+    "numpy>=1.24.0",
+    "huggingface_hub>=0.20.0",
+]
+
+[project.optional-dependencies]
+# MCP server support
+mcp = [
+    "mcp[cli]>=1.0.0",
+]
+# Web UI
+web = [
+    "nicegui>=2.0.0",
+]
+# Document parsers (PDF, DOCX, PPTX, XLSX, RTF, EPUB)
+parsers = [
+    "pypdf>=3.0.0",
+    "python-docx>=1.0.0",
+    "python-pptx>=0.6.21",
+    "openpyxl>=3.1.0",
+    "striprtf>=0.0.26",
+]
+# OCR backends
+ocr = [
     "Pillow>=10.0.0",
     "surya-ocr>=0.17.0",
     "transformers>=4.56.1,<5.0",
     "rapidocr>=3.6.0",
-    "xxhash>=3.0.0",
-    "rank-bm25>=0.2.2",
-    "numpy>=1.24.0",
 ]
-
-[project.optional-dependencies]
 ocr-tesseract = [
     "pytesseract>=0.3.10",
 ]
 ocr-easyocr = [
     "easyocr>=1.7.0",
 ]
+# Remote embedding API providers
 openai = [
     "openai>=1.0.0",
 ]
@@ -68,14 +84,24 @@ api = [
     "openai>=1.0.0",
     "voyageai>=0.3.0",
 ]
+# System monitoring
 monitoring = [
     "psutil>=5.9.0",
 ]
+# Everything (convenience meta-extra)
+all = [
+    "rag-knowledge-base[mcp,web,parsers,ocr,api,monitoring]",
+]
+# Development & testing
 dev = [
     "build>=1.0.0",
     "pyinstaller>=6.0.0",
     "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.23.0",
     "twine>=4.0.0",
+    "ruff>=0.8.0",
+    "mypy>=1.8.0",
 ]
 
 [project.scripts]
@@ -92,3 +118,98 @@ packages = ["src/rag_kb"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/rag_kb"]
+
+# ── Ruff (linter + formatter) ─────────────────────────────────────────────
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # Pyflakes
+    "B",     # flake8-bugbear
+    "I",     # isort
+    "UP",    # pyupgrade
+    "SIM",   # flake8-simplify
+    "S",     # flake8-bandit (security)
+    "ASYNC", # flake8-async
+    "PERF",  # Perflint
+    "RUF",   # Ruff-specific
+    "C4",    # flake8-comprehensions
+    "PTH",   # flake8-use-pathlib
+    "TRY",   # tryceratops
+    "G",     # flake8-logging-format
+    "LOG",   # flake8-logging
+    "PLE",   # Pylint errors
+    "PLW",   # Pylint warnings
+]
+ignore = [
+    "S101",   # allow assert in tests
+    "S603",   # subprocess call — we validate inputs
+    "S607",   # partial executable path
+    "TRY003", # long messages in exceptions are fine
+    "E501",   # line length handled by formatter
+    "B008",   # function call in default arg (used by FastMCP)
+    "UP007",  # X | Y union syntax already used, don't force everywhere
+    "S110",   # try-except-pass — used intentionally for best-effort cleanup
+    "RUF001", # unicode chars in strings are intentional (multilingual docs)
+    "RUF002", # unicode chars in docstrings are intentional
+    "RUF003", # unicode chars in comments are intentional
+    "RUF012", # mutable class defaults — Pydantic models use them correctly
+    "PTH118", # os.path.join — acceptable in some contexts
+    "PTH110", # os.path.exists — acceptable in some contexts
+    "PTH123", # builtin open — acceptable alongside Path
+    "PLW0603", # global statement — used for module-level caches
+    "SIM108", # ternary — readability preference
+    "TRY300", # try-consider-else — style choice
+    "PERF203", # try-except in loop — sometimes unavoidable
+    "S608",   # SQL injection — we use parameterized queries
+    "SIM105", # contextlib.suppress — style preference
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S106", "S108", "PLW0603"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+# ── mypy (type checker) ───────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # relax initially, tighten over time
+check_untyped_defs = true
+ignore_missing_imports = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+# ── pytest ────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::FutureWarning",
+    "ignore::ResourceWarning",
+    "ignore::pydantic.warnings.PydanticDeprecatedSince20",
+]
+
+# ── coverage ──────────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["rag_kb"]
+omit = ["*/parsers/image_parser.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__",
+]

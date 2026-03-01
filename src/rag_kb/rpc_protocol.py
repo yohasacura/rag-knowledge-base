@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 import struct
 import uuid
+from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -36,6 +38,7 @@ ERR_RAG_NOT_FOUND = -1
 ERR_RAG_ALREADY_EXISTS = -2
 ERR_INDEX_ERROR = -3
 ERR_FILE_NOT_FOUND = -4
+ERR_AUTH_FAILED = -5
 
 JSONRPC_VERSION = "2.0"
 
@@ -124,9 +127,7 @@ async def read_frame_async(reader: asyncio.StreamReader) -> dict:
     (length,) = _HEADER_STRUCT.unpack(header)
     if length > MAX_MESSAGE_SIZE:
         if header[:1] == b"{":
-            raise ConnectionError(
-                "Client is sending unframed JSON — protocol mismatch."
-            )
+            raise ConnectionError("Client is sending unframed JSON — protocol mismatch.")
         raise ValueError(f"Message too large: {length} bytes (max {MAX_MESSAGE_SIZE})")
     payload = await reader.readexactly(length)
     return json.loads(payload.decode("utf-8"))
@@ -189,12 +190,15 @@ def make_notification(method: str, params: dict) -> dict:
 
 def make_progress(request_id: str, current: int, total: int, message: str = "") -> dict:
     """Build a progress notification linked to a specific request."""
-    return make_notification("progress", {
-        "request_id": request_id,
-        "current": current,
-        "total": total,
-        "message": message,
-    })
+    return make_notification(
+        "progress",
+        {
+            "request_id": request_id,
+            "current": current,
+            "total": total,
+            "message": message,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -209,3 +213,53 @@ class RpcError(Exception):
         super().__init__(message)
         self.code = code
         self.data = data
+
+
+# ---------------------------------------------------------------------------
+# Auth token helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_token_path() -> Path:
+    """Return the path to the daemon auth token file."""
+    from rag_kb.config import DATA_DIR
+
+    return DATA_DIR / "daemon.token"
+
+
+def generate_auth_token() -> str:
+    """Generate a cryptographically random auth token and write it to disk.
+
+    The token file is only readable by the current user (best-effort on
+    Windows).  Returns the generated token string.
+    """
+    token = secrets.token_hex(32)
+    token_path = _get_token_path()
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text(token, encoding="utf-8")
+
+    # Restrict file permissions (owner-only on Unix)
+    try:
+        import stat
+
+        token_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except (OSError, AttributeError):
+        pass  # Best-effort; Windows doesn't support POSIX permissions
+
+    return token
+
+
+def read_auth_token() -> str | None:
+    """Read the auth token from disk.  Returns None if file doesn't exist."""
+    token_path = _get_token_path()
+    if not token_path.exists():
+        return None
+    return token_path.read_text(encoding="utf-8").strip()
+
+
+def remove_auth_token() -> None:
+    """Remove the auth token file (cleanup on daemon shutdown)."""
+    try:
+        _get_token_path().unlink(missing_ok=True)
+    except OSError:
+        pass

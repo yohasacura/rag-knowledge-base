@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -27,11 +28,11 @@ class _RagEventHandler(FileSystemEventHandler):
 
     def __init__(
         self,
-        rag_entry: "RagEntry",
-        registry: "RagRegistry",
-        settings: "AppSettings",
+        rag_entry: RagEntry,
+        registry: RagRegistry,
+        settings: AppSettings,
         supported_extensions: set[str],
-        on_change: "Callable[[list[str], list[str]], None] | None" = None,
+        on_change: Callable[[list[str], list[str]], None] | None = None,
     ) -> None:
         super().__init__()
         self._rag = rag_entry
@@ -92,7 +93,8 @@ class _RagEventHandler(FileSystemEventHandler):
 
         logger.info(
             "File changes detected: %d to re-index, %d to remove",
-            len(changed_paths), len(deleted_paths),
+            len(changed_paths),
+            len(deleted_paths),
         )
 
         # If an external callback was provided (e.g. by the daemon), use it
@@ -102,7 +104,7 @@ class _RagEventHandler(FileSystemEventHandler):
             try:
                 self._on_change(changed_paths, deleted_paths)
             except Exception as exc:
-                logger.error("Watcher on_change callback error: %s", exc)
+                logger.exception("Watcher on_change callback error: %s", exc)  # noqa: TRY401
             return
 
         # Fallback: direct indexing (used when running in-process)
@@ -122,7 +124,7 @@ class _RagEventHandler(FileSystemEventHandler):
                 except Exception as exc:
                     logger.warning("Watcher: error removing %s: %s", p, exc)
         except Exception as exc:
-            logger.error("Watcher flush error: %s", exc)
+            logger.exception("Watcher flush error: %s", exc)  # noqa: TRY401
 
 
 class FolderWatcher:
@@ -130,9 +132,9 @@ class FolderWatcher:
 
     def __init__(
         self,
-        rag_entry: "RagEntry",
-        registry: "RagRegistry",
-        settings: "AppSettings",
+        rag_entry: RagEntry,
+        registry: RagRegistry,
+        settings: AppSettings,
         on_change: Callable[[list[str], list[str]], None] | None = None,
     ) -> None:
         self._rag = rag_entry
@@ -158,7 +160,10 @@ class FolderWatcher:
 
         exts = set(self._settings.supported_extensions)
         handler = _RagEventHandler(
-            self._rag, self._registry, self._settings, exts,
+            self._rag,
+            self._registry,
+            self._settings,
+            exts,
             on_change=self._on_change,
         )
 

@@ -5,17 +5,21 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from zipfile import ZipFile, ZIP_DEFLATED
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from rag_kb import __version__
-from rag_kb.config import RagRegistry, RAGS_DIR
+from rag_kb.config import RAGS_DIR, RagRegistry
 
 logger = logging.getLogger(__name__)
 
 MANIFEST_NAME = "manifest.json"
+
+# Safety limits for ZIP import to prevent zip-bombs and resource exhaustion
+MAX_TOTAL_UNCOMPRESSED_SIZE: int = 10 * 1024 * 1024 * 1024  # 10 GB
+MAX_INDIVIDUAL_FILE_SIZE: int = 2 * 1024 * 1024 * 1024  # 2 GB
+MAX_MEMBER_COUNT: int = 100_000
 
 
 def export_rag(
@@ -64,7 +68,11 @@ def export_rag(
     size_mb = output.stat().st_size / (1024 * 1024)
     logger.info(
         "Exported RAG '%s' → %s (%.1f MB, %d files, %d chunks)",
-        rag_name, output, size_mb, entry.file_count, entry.chunk_count,
+        rag_name,
+        output,
+        size_mb,
+        entry.file_count,
+        entry.chunk_count,
     )
     return str(output.resolve())
 
@@ -90,6 +98,9 @@ def import_rag(
         if MANIFEST_NAME not in zf.namelist():
             raise ValueError(f"Invalid .rag file: missing {MANIFEST_NAME}")
 
+        # ── Safety checks ─────────────────────────────────────────────
+        _validate_zip_safety(zf)
+
         manifest = json.loads(zf.read(MANIFEST_NAME))
         _validate_manifest(manifest)
 
@@ -109,13 +120,20 @@ def import_rag(
         rag_dir = rags_directory / name / "chroma_db"
         rag_dir.mkdir(parents=True, exist_ok=True)
 
-        chroma_members = [m for m in zf.namelist() if m.startswith("chroma_db/") and not m.endswith("/")]
+        chroma_members = [
+            m for m in zf.namelist() if m.startswith("chroma_db/") and not m.endswith("/")
+        ]
         if not chroma_members:
             raise ValueError("Invalid .rag file: no chroma_db/ contents found")
 
         for member in chroma_members:
             # Strip the chroma_db/ prefix and write to target
-            relative = member[len("chroma_db/"):]
+            relative = member[len("chroma_db/") :]
+            if not relative:
+                continue
+
+            # ── Path traversal protection ─────────────────────────────
+            _check_path_traversal(relative, rag_dir)
             target = rag_dir / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(member) as src_f, open(target, "wb") as dst_f:
@@ -134,8 +152,11 @@ def import_rag(
 
     logger.info(
         "Imported RAG '%s' from %s (model: %s, %d files, %d chunks)",
-        name, src.name, manifest.get("embedding_model"), 
-        manifest.get("file_count", 0), manifest.get("chunk_count", 0),
+        name,
+        src.name,
+        manifest.get("embedding_model"),
+        manifest.get("file_count", 0),
+        manifest.get("chunk_count", 0),
     )
     return name
 
@@ -149,10 +170,66 @@ def peek_rag_file(file_path: str) -> dict:
     with ZipFile(str(src), "r") as zf:
         if MANIFEST_NAME not in zf.namelist():
             raise ValueError(f"Invalid .rag file: missing {MANIFEST_NAME}")
+        _validate_zip_safety(zf)
         manifest = json.loads(zf.read(MANIFEST_NAME))
 
     manifest["file_size_mb"] = round(src.stat().st_size / (1024 * 1024), 2)
     return manifest
+
+
+def _validate_zip_safety(zf: ZipFile) -> None:
+    """Validate ZIP archive against resource exhaustion and malicious content.
+
+    Raises ``ValueError`` if the archive exceeds safety limits.
+    """
+    members = zf.infolist()
+
+    # 1. Member count limit
+    if len(members) > MAX_MEMBER_COUNT:
+        raise ValueError(
+            f"ZIP archive contains {len(members)} members "
+            f"(limit: {MAX_MEMBER_COUNT}). Possible zip-bomb."
+        )
+
+    # 2. Total uncompressed size + individual file size limits
+    total_size = 0
+    for info in members:
+        if info.file_size > MAX_INDIVIDUAL_FILE_SIZE:
+            raise ValueError(
+                f"ZIP member '{info.filename}' has uncompressed size "
+                f"{info.file_size / (1024**3):.1f} GB "
+                f"(limit: {MAX_INDIVIDUAL_FILE_SIZE / (1024**3):.0f} GB)"
+            )
+        total_size += info.file_size
+
+    if total_size > MAX_TOTAL_UNCOMPRESSED_SIZE:
+        raise ValueError(
+            f"ZIP total uncompressed size {total_size / (1024**3):.1f} GB "
+            f"exceeds limit of {MAX_TOTAL_UNCOMPRESSED_SIZE / (1024**3):.0f} GB. "
+            f"Possible zip-bomb."
+        )
+
+    # 3. Path traversal detection on all members
+    for info in members:
+        name = info.filename
+        if name.startswith("/") or ".." in name.split("/"):
+            raise ValueError(
+                f"ZIP member '{name}' contains path traversal component — refusing to extract."
+            )
+
+
+def _check_path_traversal(relative: str, target_dir: Path) -> None:
+    """Ensure resolved extraction path stays within *target_dir*.
+
+    Raises ``ValueError`` on path traversal attempts.
+    """
+    resolved = (target_dir / relative).resolve()
+    target_resolved = target_dir.resolve()
+    if not str(resolved).startswith(str(target_resolved)):
+        raise ValueError(
+            f"Path traversal detected: member resolves to '{resolved}' "
+            f"which is outside target directory '{target_resolved}'"
+        )
 
 
 def _validate_manifest(manifest: dict) -> None:

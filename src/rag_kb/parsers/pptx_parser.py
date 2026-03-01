@@ -11,7 +11,7 @@ import io
 import logging
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,9 @@ class PptxParser:
             from pptx import Presentation
             from pptx.enum.shapes import MSO_SHAPE_TYPE
         except ImportError as exc:
-            raise ImportError("python-pptx is required for PPTX parsing: pip install python-pptx") from exc
+            raise ImportError(
+                "python-pptx is required for PPTX parsing: pip install python-pptx"
+            ) from exc
 
         prs = Presentation(str(file_path))
         slides_text: list[str] = []
@@ -82,6 +84,7 @@ class PptxParser:
     def _ocr_shape_image(shape, slide_num: int) -> str:
         """OCR a picture shape and return the extracted text (or "")."""
         from PIL import Image as PILImage
+
         from rag_kb.parsers.image_parser import ocr_image
 
         try:
@@ -93,10 +96,11 @@ class PptxParser:
                 return ""
 
             label = f"slide-{slide_num}/{shape.name}"
-            ocr_text, engine = ocr_image(pil_img, label=label)
+            ocr_text, _engine = ocr_image(pil_img, label=label)
             return ocr_text
 
         except Exception as exc:
-            logger.debug("PPTX image OCR failed for shape '%s' on slide %d: %s",
-                         shape.name, slide_num, exc)
+            logger.debug(
+                "PPTX image OCR failed for shape '%s' on slide %d: %s", shape.name, slide_num, exc
+            )
             return ""

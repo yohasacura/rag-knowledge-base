@@ -7,7 +7,7 @@ import io
 import logging
 from pathlib import Path
 
-from rag_kb.parsers.base import DocumentParser, ParsedDocument
+from rag_kb.parsers.base import ParsedDocument
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +31,7 @@ class CsvParser:
             dialect.delimiter = "\t"
 
         reader = csv.reader(io.StringIO(raw), dialect)
-        rows: list[list[str]] = []
-        for row in reader:
-            rows.append([cell.strip() for cell in row])
+        rows = [[cell.strip() for cell in row] for row in reader]
 
         if not rows:
             return ParsedDocument(text="", source_path=str(file_path), metadata={"format": "csv"})

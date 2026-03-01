@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from rag_kb.file_manifest import FileManifest
 from rag_kb.indexer import Indexer
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def manifest_db(tmp_path):
@@ -61,6 +60,7 @@ def tmp_rag(tmp_path):
 # ---------------------------------------------------------------------------
 # Tests: FileManifest.invalidate()
 # ---------------------------------------------------------------------------
+
 
 class TestManifestInvalidation:
     def test_invalidate_sets_empty_hash(self, manifest_db, source_files):
@@ -122,6 +122,7 @@ class TestManifestInvalidation:
 # Tests: FileManifest.mark_indexed() re-validates
 # ---------------------------------------------------------------------------
 
+
 class TestManifestRevalidation:
     def test_reindex_after_invalidation(self, manifest_db, source_files):
         """mark_indexed() after invalidate() should restore the hash."""
@@ -137,6 +138,7 @@ class TestManifestRevalidation:
 # ---------------------------------------------------------------------------
 # Tests: Lock file mechanism
 # ---------------------------------------------------------------------------
+
 
 class TestLockFileMechanism:
     def test_lock_file_written_on_index_start(self, tmp_rag):
@@ -154,7 +156,7 @@ class TestLockFileMechanism:
         indexer._write_lock_file(full=True)
 
         lock_path = os.path.join(tmp_rag.db_path, ".indexing_lock")
-        with open(lock_path, "r") as f:
+        with open(lock_path) as f:
             data = json.load(f)
 
         assert "started_at" in data
@@ -212,9 +214,12 @@ class TestLockFileMechanism:
 # Tests: Simulated crash scenarios
 # ---------------------------------------------------------------------------
 
+
 class TestCrashScenarios:
     def test_crash_after_invalidation_leaves_correct_state(
-        self, manifest_db, source_files,
+        self,
+        manifest_db,
+        source_files,
     ):
         """Simulate a crash after invalidation but before re-embedding.
 
@@ -255,6 +260,7 @@ class TestCrashScenarios:
 # ---------------------------------------------------------------------------
 # Tests: verify_index_consistency()
 # ---------------------------------------------------------------------------
+
 
 class TestVerifyConsistency:
     def test_verify_empty_index_is_ok(self):
@@ -316,6 +322,7 @@ class TestVerifyConsistency:
 # ---------------------------------------------------------------------------
 # Tests: FileManifest basics (regression coverage)
 # ---------------------------------------------------------------------------
+
 
 class TestManifestBasics:
     def test_new_file_is_changed(self, manifest_db, source_files):
