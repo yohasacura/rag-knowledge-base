@@ -393,10 +393,18 @@ class TestLogParser:
 # ---------------------------------------------------------------------------
 
 
+def _try_parse_verify(name: str):
+    """Parse a fixture file, skipping if the required library is missing."""
+    try:
+        return _parse_verify(name)
+    except ImportError as exc:
+        pytest.skip(str(exc))
+
+
 class TestPdfParser:
     @pytest.mark.skipif(not _has_verify_file("test.pdf"), reason="test.pdf missing")
     def test_real_file(self):
-        doc = _parse_verify("test.pdf")
+        doc = _try_parse_verify("test.pdf")
         assert doc is not None
         assert not doc.is_empty
 
@@ -404,7 +412,7 @@ class TestPdfParser:
 class TestDocxParser:
     @pytest.mark.skipif(not _has_verify_file("test.docx"), reason="test.docx missing")
     def test_real_file(self):
-        doc = _parse_verify("test.docx")
+        doc = _try_parse_verify("test.docx")
         assert doc is not None
         assert not doc.is_empty
 
@@ -412,7 +420,7 @@ class TestDocxParser:
 class TestPptxParser:
     @pytest.mark.skipif(not _has_verify_file("test.pptx"), reason="test.pptx missing")
     def test_real_file(self):
-        doc = _parse_verify("test.pptx")
+        doc = _try_parse_verify("test.pptx")
         assert doc is not None
         assert not doc.is_empty
 
@@ -420,7 +428,7 @@ class TestPptxParser:
 class TestXlsxParser:
     @pytest.mark.skipif(not _has_verify_file("test.xlsx"), reason="test.xlsx missing")
     def test_real_file(self):
-        doc = _parse_verify("test.xlsx")
+        doc = _try_parse_verify("test.xlsx")
         assert doc is not None
         assert not doc.is_empty
 
@@ -428,7 +436,7 @@ class TestXlsxParser:
 class TestEpubParser:
     @pytest.mark.skipif(not _has_verify_file("test.epub"), reason="test.epub missing")
     def test_real_file(self):
-        doc = _parse_verify("test.epub")
+        doc = _try_parse_verify("test.epub")
         assert doc is not None
         assert not doc.is_empty
 
@@ -436,7 +444,7 @@ class TestEpubParser:
 class TestRtfParser:
     @pytest.mark.skipif(not _has_verify_file("test.rtf"), reason="test.rtf missing")
     def test_real_file(self):
-        doc = _parse_verify("test.rtf")
+        doc = _try_parse_verify("test.rtf")
         assert doc is not None
         assert not doc.is_empty
 
@@ -444,7 +452,7 @@ class TestRtfParser:
 class TestOdtParser:
     @pytest.mark.skipif(not _has_verify_file("test.odt"), reason="test.odt missing")
     def test_real_file(self):
-        doc = _parse_verify("test.odt")
+        doc = _try_parse_verify("test.odt")
         assert doc is not None
         assert not doc.is_empty
 
@@ -452,7 +460,7 @@ class TestOdtParser:
 class TestOdsParser:
     @pytest.mark.skipif(not _has_verify_file("test.ods"), reason="test.ods missing")
     def test_real_file(self):
-        doc = _parse_verify("test.ods")
+        doc = _try_parse_verify("test.ods")
         assert doc is not None
         assert not doc.is_empty
 
@@ -460,7 +468,7 @@ class TestOdsParser:
 class TestOdpParser:
     @pytest.mark.skipif(not _has_verify_file("test.odp"), reason="test.odp missing")
     def test_real_file(self):
-        doc = _parse_verify("test.odp")
+        doc = _try_parse_verify("test.odp")
         assert doc is not None
         assert not doc.is_empty
 
@@ -518,6 +526,9 @@ class TestAllTestDocs:
         parser = get_parser(fpath)
         if parser is None:
             pytest.skip(f"No parser registered for {fpath.suffix}")
-        doc = parser.parse(fpath)
+        try:
+            doc = parser.parse(fpath)
+        except ImportError as exc:
+            pytest.skip(str(exc))
         assert isinstance(doc, ParsedDocument)
         assert doc.source_path == str(fpath)

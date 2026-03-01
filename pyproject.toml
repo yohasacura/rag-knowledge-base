@@ -66,24 +66,20 @@ dependencies = [
     "rank-bm25>=0.2.2",
     "numpy>=1.24.0",
     "huggingface_hub>=0.20.0",
-]
-
-[project.optional-dependencies]
-# MCP server support
-mcp = [
+    # MCP server
     "mcp[cli]>=1.0.0",
-]
-# Web UI
-web = [
-    "nicegui>=2.0.0",
-]
-# Document parsers (PDF, DOCX, PPTX, XLSX, RTF, EPUB)
-parsers = [
+    # Document parsers (PDF, DOCX, PPTX, XLSX, RTF)
     "pypdf>=3.0.0",
     "python-docx>=1.0.0",
     "python-pptx>=0.6.21",
     "openpyxl>=3.1.0",
     "striprtf>=0.0.26",
+]
+
+[project.optional-dependencies]
+# Web UI
+web = [
+    "nicegui>=2.0.0",
 ]
 # OCR backends
 ocr = [
@@ -115,7 +111,7 @@ monitoring = [
 ]
 # Everything (convenience meta-extra)
 all = [
-    "rag-knowledge-base[mcp,web,parsers,ocr,api,monitoring]",
+    "rag-knowledge-base[web,ocr,api,monitoring]",
 ]
 # Development & testing
 dev = [

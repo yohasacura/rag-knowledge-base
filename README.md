@@ -46,6 +46,18 @@
 pip install rag-knowledge-base
 ```
 
+This installs everything needed to index, search, and serve via MCP — including parsers for PDF, DOCX, PPTX, XLSX, and RTF.
+
+#### Optional extras
+
+| Extra | Install command | What it adds |
+|-------|----------------|-------------|
+| `web` | `pip install rag-knowledge-base[web]` | NiceGUI web dashboard |
+| `ocr` | `pip install rag-knowledge-base[ocr]` | Image OCR (Surya, RapidOCR) |
+| `api` | `pip install rag-knowledge-base[api]` | OpenAI / Voyage embedding APIs |
+| `monitoring` | `pip install rag-knowledge-base[monitoring]` | System metrics (psutil) |
+| `all` | `pip install rag-knowledge-base[all]` | All of the above |
+
 ### Install from source
 
 ```bash
