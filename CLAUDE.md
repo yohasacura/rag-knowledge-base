@@ -5,7 +5,7 @@
 **RAG Knowledge Base** — a 100% offline Retrieval-Augmented Generation (RAG) storage and MCP server for querying local document knowledge bases. Distributed as a Python package via PyPI (`rag-knowledge-base`). Provides CLI, MCP server (stdio/HTTP), Web UI, and Python API interfaces.
 
 **Repo:** https://github.com/yohasacura/rag-knowledge-base
-**Version:** 1.0.0 | **License:** MIT | **Python:** 3.10–3.13
+**Version:** 1.0.1 | **License:** MIT | **Python:** 3.10–3.13
 
 ## Quick Reference
 

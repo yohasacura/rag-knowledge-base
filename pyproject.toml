@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rag-knowledge-base"
-version = "1.0.0"
+version = "1.0.1"
 description = "100% offline RAG storage and MCP server for querying local document knowledge bases"
 readme = "README.md"
 license = "MIT"
@@ -12,18 +12,43 @@ requires-python = ">=3.10"
 authors = [
     { name = "RAG Knowledge Base Contributors" },
 ]
-keywords = ["rag", "mcp", "knowledge-base", "offline", "vector-search"]
+keywords = [
+    "rag",
+    "mcp",
+    "knowledge-base",
+    "offline",
+    "vector-search",
+    "embeddings",
+    "chromadb",
+    "semantic-search",
+    "retrieval-augmented-generation",
+    "mcp-server",
+    "document-indexing",
+    "local-ai",
+]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Framework :: Pydantic :: 2",
+    "Natural Language :: English",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Indexing",
+    "Topic :: Database",
+    "Typing :: Typed",
 ]
 
 # ── Core dependencies (always installed) ──────────────────────────────────

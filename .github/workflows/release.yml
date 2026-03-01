@@ -59,6 +59,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      attestations: write
+      id-token: write
 
     steps:
       - name: Download distribution packages
@@ -70,6 +72,11 @@ jobs:
       - name: Extract tag name
         id: version
         run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -89,7 +96,8 @@ jobs:
       name: pypi
       url: https://pypi.org/p/rag-knowledge-base
     permissions:
-      id-token: write  # mandatory for Trusted Publishing
+      id-token: write       # mandatory for Trusted Publishing
+      attestations: write   # generate Sigstore attestations (appears in Packages tab)
 
     steps:
       - name: Download distribution packages
@@ -100,3 +108,5 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true
