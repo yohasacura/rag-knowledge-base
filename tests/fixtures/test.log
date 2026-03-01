@@ -1,0 +1,6 @@
+2026-02-25 10:00:01 INFO  Server started on port 8080
+2026-02-25 10:00:05 INFO  Connected to database
+2026-02-25 10:01:12 WARNING  High memory usage: 85%
+2026-02-25 10:02:30 ERROR  Failed to connect to cache: Connection refused
+2026-02-25 10:02:31 INFO  Retrying cache connection...
+2026-02-25 10:02:32 CRITICAL  Cache unavailable after 3 retries

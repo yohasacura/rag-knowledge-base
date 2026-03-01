@@ -304,8 +304,7 @@ class RagKnowledgeBaseAPI:
         # WS2: Refuse to delete a RAG that is currently being indexed
         if name in self._indexing_rags:
             raise RuntimeError(
-                f"RAG '{name}' is currently being indexed. "
-                f"Cancel indexing first before deleting."
+                f"RAG '{name}' is currently being indexed. Cancel indexing first before deleting."
             )
 
         active = self.registry.get_active()

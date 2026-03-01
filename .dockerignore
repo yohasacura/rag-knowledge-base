@@ -29,7 +29,6 @@ data/
 .cache/
 
 # Test files
-test-docs-verify/
 tests/
 
 # Git

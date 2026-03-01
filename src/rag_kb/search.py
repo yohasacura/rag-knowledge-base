@@ -150,8 +150,7 @@ def _get_reranker(model_name: str) -> Any:
         from sentence_transformers import CrossEncoder
     except ImportError as exc:
         raise ImportError(
-            "sentence-transformers is required for re-ranking: "
-            "pip install sentence-transformers"
+            "sentence-transformers is required for re-ranking: pip install sentence-transformers"
         ) from exc
 
     from rag_kb.models import get_model_path, get_model_spec

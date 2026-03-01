@@ -1,0 +1,8 @@
+name: RAG Knowledge Base
+version: 1.0
+dependencies:
+  - chromadb
+  - sentence-transformers
+settings:
+  embedding_model: all-MiniLM-L6-v2
+  chunk_size: 512

@@ -76,8 +76,7 @@ class FileManifest:
         norm = cls._norm(str(db_path))
         with cls._instances_lock:
             to_close = [
-                (k, v) for k, v in cls._instances.items()
-                if k.startswith(norm) or k == norm
+                (k, v) for k, v in cls._instances.items() if k.startswith(norm) or k == norm
             ]
             for _k, inst in to_close:
                 try:

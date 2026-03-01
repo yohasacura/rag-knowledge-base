@@ -139,8 +139,8 @@ class AppSettings(BaseModel):
     mmr_lambda: float = 0.7  # 0 = max diversity, 1 = max relevance
 
     # Indexing performance settings
-    indexing_workers: int = 14             # parallel parsing workers (0 = auto)
-    embedding_batch_size: int = 512        # texts per encode() call
+    indexing_workers: int = 14  # parallel parsing workers (0 = auto)
+    embedding_batch_size: int = 512  # texts per encode() call
 
     # ChromaDB HNSW tuning
     hnsw_ef_construction: int = 256
@@ -181,9 +181,7 @@ class AppSettings(BaseModel):
         if os.environ.get("RAG_KB_VOYAGE_API_KEY"):
             data.pop("voyage_api_key", None)
         # Atomic write: write to temp file then os.replace()
-        fd, tmp = tempfile.mkstemp(
-            dir=str(path.parent), suffix=".tmp", prefix=".config_"
-        )
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp", prefix=".config_")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 yaml.safe_dump(data, fh, default_flow_style=False, sort_keys=False)

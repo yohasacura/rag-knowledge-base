@@ -181,10 +181,10 @@ def sample_docs_dir(tmp_path):
 
 @pytest.fixture
 def all_format_docs_dir(tmp_path):
-    """Copy all test documents from test-docs-verify/ into a temp directory."""
-    src = _WORKSPACE_ROOT / "test-docs-verify"
+    """Copy all test documents from tests/fixtures/ into a temp directory."""
+    src = _WORKSPACE_ROOT / "tests" / "fixtures"
     if not src.exists():
-        pytest.skip("test-docs-verify/ not found")
+        pytest.skip("tests/fixtures/ not found")
     dst = tmp_path / "all-format-docs"
     shutil.copytree(src, dst)
     return dst

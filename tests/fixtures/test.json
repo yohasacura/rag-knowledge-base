@@ -1,0 +1,13 @@
+{
+  "project": "RAG Knowledge Base",
+  "version": "1.0",
+  "features": [
+    "parsing",
+    "embedding",
+    "search"
+  ],
+  "config": {
+    "model": "all-MiniLM-L6-v2",
+    "chunk_size": 512
+  }
+}

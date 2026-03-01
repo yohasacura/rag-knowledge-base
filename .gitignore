@@ -39,8 +39,5 @@ data/
 # Bundled ML models (large binaries)
 models/
 
-# Test data (not part of the package)
-test-docs-verify/
-
 # Sentence-transformers / HuggingFace cache
 .cache/

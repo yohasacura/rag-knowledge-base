@@ -433,7 +433,9 @@ class VectorStore:
         page = self._GET_PAGE_SIZE
         while True:
             batch = self._collection.get(
-                include=["metadatas"], limit=page, offset=offset,
+                include=["metadatas"],
+                limit=page,
+                offset=offset,
             )
             metas = batch.get("metadatas") or []
             if not metas:
@@ -518,7 +520,9 @@ class VectorStore:
         page = self._GET_PAGE_SIZE
         while True:
             results = self._collection.get(
-                include=["documents", "metadatas"], limit=page, offset=offset,
+                include=["documents", "metadatas"],
+                limit=page,
+                offset=offset,
             )
             batch_ids = results.get("ids") or []
             if not batch_ids:
@@ -707,7 +711,9 @@ class VectorStore:
             page = self._GET_PAGE_SIZE
             while True:
                 batch = self._collection.get(
-                    include=["metadatas"], limit=page, offset=offset,
+                    include=["metadatas"],
+                    limit=page,
+                    offset=offset,
                 )
                 metas = batch.get("metadatas") or []
                 if not metas:

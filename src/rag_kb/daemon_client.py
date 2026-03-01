@@ -749,9 +749,7 @@ def kill_stale_daemon(*, graceful_timeout: float = 3.0) -> bool:
             pass
         return True
 
-    logger.warning(
-        "Stale daemon detected (PID %d, not responding). Killing …", pid
-    )
+    logger.warning("Stale daemon detected (PID %d, not responding). Killing …", pid)
     killed = _kill_process(pid, timeout=graceful_timeout)
     if killed:
         logger.info("Stale daemon (PID %d) killed.", pid)

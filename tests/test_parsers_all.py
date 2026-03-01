@@ -1,7 +1,7 @@
-"""Comprehensive parser tests using test-docs-verify/ sample files + synthetic edge cases.
+"""Comprehensive parser tests using tests/fixtures/ sample files + synthetic edge cases.
 
 Each parser class is tested against:
-1. Its real sample file from test-docs-verify/ (if present)
+1. Its real sample file from tests/fixtures/ (if present)
 2. Synthetic edge-case content
 3. Empty file handling
 
@@ -24,7 +24,7 @@ from rag_kb.parsers.registry import (
 )
 
 # Absolute path to the verification docs shipped with the repo
-_VERIFY_DIR = Path(__file__).resolve().parent.parent / "test-docs-verify"
+_VERIFY_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 # ---------------------------------------------------------------------------
@@ -33,12 +33,12 @@ _VERIFY_DIR = Path(__file__).resolve().parent.parent / "test-docs-verify"
 
 
 def _has_verify_file(name: str) -> bool:
-    """Check if a specific test-docs-verify file exists."""
+    """Check if a specific test fixture file exists."""
     return (_VERIFY_DIR / name).is_file()
 
 
 def _parse_verify(name: str) -> ParsedDocument | None:
-    """Parse a file from test-docs-verify/."""
+    """Parse a file from tests/fixtures/."""
     return parse_file(_VERIFY_DIR / name)
 
 
@@ -389,7 +389,7 @@ class TestLogParser:
 
 
 # ---------------------------------------------------------------------------
-# Binary format parsers — require test-docs-verify/ files
+# Binary format parsers — require tests/fixtures/ files
 # ---------------------------------------------------------------------------
 
 
@@ -500,12 +500,12 @@ class TestImageParser:
 
 
 # ---------------------------------------------------------------------------
-# Cross-parser: all test-docs-verify/ files parseable without crash
+# Cross-parser: all tests/fixtures/ files parseable without crash
 # ---------------------------------------------------------------------------
 
 
 class TestAllTestDocs:
-    """Smoke test: every file in test-docs-verify/ should parse without exception."""
+    """Smoke test: every file in tests/fixtures/ should parse without exception."""
 
     @pytest.mark.parametrize(
         "filename",

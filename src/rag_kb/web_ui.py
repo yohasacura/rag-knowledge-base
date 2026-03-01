@@ -1760,9 +1760,7 @@ class IndexingPage:
             errors = result.get("errors", [])
 
             if errors:
-                self._progress_phase.set_text(
-                    f"⚠️ Done with {len(errors)} error(s)"
-                )
+                self._progress_phase.set_text(f"⚠️ Done with {len(errors)} error(s)")
             else:
                 self._progress_phase.set_text("✅ Done")
             self._progress_bar.value = 1.0
@@ -1793,16 +1791,19 @@ class IndexingPage:
 
             # Show errors in a visible block so they can't be missed
             if errors:
-                with self._progress_container, ui.expansion(
-                    f"⚠ {len(errors)} indexing error(s)",
-                    icon="warning",
-                ).classes("w-full text-orange-400").props("dense"):
-                        for err in errors[:20]:
-                            ui.label(err).classes("text-xs text-orange-300 font-mono")
-                        if len(errors) > 20:
-                            ui.label(f"… and {len(errors) - 20} more").classes(
-                                "text-xs text-gray-500"
-                            )
+                with (
+                    self._progress_container,
+                    ui.expansion(
+                        f"⚠ {len(errors)} indexing error(s)",
+                        icon="warning",
+                    )
+                    .classes("w-full text-orange-400")
+                    .props("dense"),
+                ):
+                    for err in errors[:20]:
+                        ui.label(err).classes("text-xs text-orange-300 font-mono")
+                    if len(errors) > 20:
+                        ui.label(f"… and {len(errors) - 20} more").classes("text-xs text-gray-500")
 
             ui.notify(
                 f"Indexing complete: {files} files, {chunks} chunks"
@@ -3018,10 +3019,14 @@ def _build_app():
         ui.space()
 
         # Persistent indexing indicator — visible from any page
-        indexing_badge = ui.button(
-            "⏳ Indexing…",
-            on_click=lambda: switch_page("indexing"),
-        ).props("flat dense no-caps size=sm color=amber").classes("text-xs")
+        indexing_badge = (
+            ui.button(
+                "⏳ Indexing…",
+                on_click=lambda: switch_page("indexing"),
+            )
+            .props("flat dense no-caps size=sm color=amber")
+            .classes("text-xs")
+        )
         indexing_badge.set_visibility(False)
 
         daemon_label = ui.label("● Daemon").classes("text-xs text-green-400")
@@ -3053,11 +3058,7 @@ def _build_app():
 
     # ---- Left Drawer (sidebar navigation) ----
     drawer = ui.left_drawer(value=True, fixed=True, bordered=True)
-    with (
-        drawer
-        .classes("bg-[#11151c] !p-0")
-        .props("width=220")
-    ):
+    with drawer.classes("bg-[#11151c] !p-0").props("width=220"):
         ui.label("Offline RAG Manager").classes("text-gray-400 text-xs px-4 pt-4 pb-3")
 
         for mat_icon, label, page_id in nav_items:

@@ -241,7 +241,11 @@ class TestDetachedRag:
 # ---------------------------------------------------------------------------
 
 
+import sys
+
+
 class TestSafeDisplayPathEdge:
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only path semantics")
     def test_windows_paths(self):
         from rag_kb.config import safe_display_path
 

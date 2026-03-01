@@ -644,11 +644,7 @@ class RagDaemon:
         # Return cached result for frequent polling when not indexing
         # and no specific rag_name override is requested.
         now = time.monotonic()
-        if (
-            not is_indexing
-            and not rag_name
-            and self._status_cache is not None
-        ):
+        if not is_indexing and not rag_name and self._status_cache is not None:
             ts, cached = self._status_cache
             if now - ts < self._STATUS_CACHE_TTL:
                 # Refresh live indexing overlay (may have just started)
@@ -661,7 +657,8 @@ class RagDaemon:
         status = await loop.run_in_executor(
             None,
             lambda: self._api.get_index_status(
-                rag_name=rag_name, skip_store_stats=is_indexing,
+                rag_name=rag_name,
+                skip_store_stats=is_indexing,
             ),
         )
         result = {
