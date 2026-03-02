@@ -6,7 +6,9 @@ through ``DaemonClient``.  The daemon is auto-started on first use.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -23,8 +25,44 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _install_windows_pipe_error_handler() -> None:
+    """Suppress harmless ``ConnectionAbortedError`` on Windows.
+
+    When the MCP host (VS Code, Cursor, …) closes the stdio pipes, the
+    Windows ProactorEventLoop tries ``socket.shutdown(SHUT_RDWR)`` on an
+    already-aborted pipe handle, raising ``ConnectionAbortedError`` inside
+    ``_ProactorBasePipeTransport._call_connection_lost``.  This is
+    cosmetic — no data is lost — but produces a scary traceback on stderr.
+
+    We install a custom event-loop exception handler (identical to the one
+    the daemon already uses) to silently suppress these errors.
+    """
+    if sys.platform != "win32":
+        return
+
+    loop = asyncio.get_running_loop()
+    _orig_handler = loop.get_exception_handler()
+
+    def _quiet_exception_handler(
+        loop: asyncio.AbstractEventLoop, context: dict[str, Any]
+    ) -> None:
+        exc = context.get("exception")
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, OSError)):
+            logger.debug("Suppressed transport error: %s", exc)
+            return
+        # Fall back to the original / default handler
+        if _orig_handler is not None:
+            _orig_handler(loop, context)
+        else:
+            loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_quiet_exception_handler)
+
+
 @asynccontextmanager
 async def app_lifespan(server: FastMCP) -> AsyncIterator[DaemonClient]:
+    _install_windows_pipe_error_handler()
+
     client = DaemonClient()
     client.ensure_daemon()
     client.connect()
@@ -435,4 +473,14 @@ def run_http(host: str = "127.0.0.1", port: int = 8080) -> None:
     """Run the MCP server with streamable HTTP transport."""
     mcp.settings.host = host
     mcp.settings.port = port
+
+    # When binding to a non-loopback address (e.g. 0.0.0.0 for LAN access),
+    # configure DNS rebinding protection to allow requests from any Host header.
+    if host != "127.0.0.1" and host != "localhost":
+        from mcp.server.fastmcp.server import TransportSecuritySettings
+
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=False,
+        )
+
     mcp.run(transport="streamable-http")
